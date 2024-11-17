@@ -1,6 +1,8 @@
 mod checksum;
 mod error;
 
-fn main() {
-    println!("Hello, world!");
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    println!("Hello World");
+    Ok(())
 }
