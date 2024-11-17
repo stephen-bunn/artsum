@@ -3,6 +3,7 @@ use std::path::Path;
 
 use crc32fast::Hasher as Crc32;
 use md5::Context as Md5;
+use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use sha2::{Digest as _, Sha256, Sha512};
 use tokio::fs::File;
@@ -56,6 +57,26 @@ impl ChecksumAlgorithm {
 pub struct Checksum {
     pub algorithm: ChecksumAlgorithm,
     pub digest: String,
+}
+
+impl Serialize for Checksum {
+    /// Serializes the checksum to a string, which is in the format '<algorithm>;<digest>'.
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.to_string().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Checksum {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Checksum::from_str(&s).map_err(serde::de::Error::custom)
+    }
 }
 
 impl Checksum {
