@@ -1,16 +1,14 @@
-use std::io::{Error, ErrorKind};
-use std::path::Path;
-
+use crate::error::ChecksumError;
 use crc32fast::Hasher as Crc32;
 use md5::Context as Md5;
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use sha2::{Digest as _, Sha256, Sha512};
+use std::io::{Error, ErrorKind};
+use std::path::Path;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use xxhash_rust::{xxh3::Xxh3, xxh32::Xxh32, xxh64::Xxh64};
-
-use crate::error::ChecksumError;
 
 /// The delimiter used to separate the checksum algorithm and the digest.
 const CHECKSUM_DELIMITER: char = ';';
@@ -18,7 +16,17 @@ const CHECKSUM_DELIMITER: char = ';';
 const DEFAULT_CHUNK_SIZE: u64 = 8192;
 
 /// Defines the checksum algorithms supported by this library.
-#[derive(Clone, Debug, strum_macros::EnumString, strum_macros::EnumIter, strum_macros::Display)]
+#[derive(
+    Clone,
+    Debug,
+    Hash,
+    PartialEq,
+    Eq,
+    strum_macros::EnumString,
+    strum_macros::EnumIter,
+    strum_macros::Display,
+    clap::ValueEnum,
+)]
 #[strum(serialize_all = "lowercase")]
 pub enum ChecksumAlgorithm {
     MD5,
@@ -53,7 +61,7 @@ impl ChecksumAlgorithm {
 }
 
 /// Defines a checksum, which is a pair of an algorithm and a digest.
-#[derive(Debug)]
+#[derive(Debug, Hash, PartialEq, Eq)]
 pub struct Checksum {
     pub algorithm: ChecksumAlgorithm,
     pub digest: String,
