@@ -1,7 +1,7 @@
 use super::{Manifest, ManifestFormat, ManifestParser};
 use crate::error::ManifestError;
 use async_trait::async_trait;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use toml;
 
 pub const SFV_FILENAME: &str = "sfv.toml";
@@ -19,8 +19,17 @@ impl ManifestParser for SFVParser {
         ManifestFormat::SFV
     }
 
-    fn can_handle_dir(&self, dir: &Path) -> bool {
-        dir.join(SFV_FILENAME).is_file()
+    fn get_manifest_file(&self, dirpath: &Path) -> Option<PathBuf> {
+        if !dirpath.is_dir() {
+            return None;
+        }
+
+        let manifest_file = dirpath.join(SFV_FILENAME);
+        if !manifest_file.is_file() {
+            return None;
+        }
+
+        Some(manifest_file)
     }
 
     fn can_handle_file(&self, filepath: &Path) -> bool {
@@ -30,8 +39,16 @@ impl ManifestParser for SFVParser {
         }
     }
 
-    async fn parse(&self, s: &str) -> Result<Manifest, ManifestError> {
-        toml::from_str(s).map_err(|e| ManifestError::DeserializeError(e))
+    fn can_handle_dir(&self, dirpath: &Path) -> bool {
+        if let Some(manifest_file) = self.get_manifest_file(dirpath) {
+            return self.can_handle_file(&manifest_file);
+        }
+
+        false
+    }
+
+    async fn parse(&self, data: &str) -> Result<Manifest, ManifestError> {
+        toml::from_str(data).map_err(|e| ManifestError::DeserializeError(e))
     }
 
     async fn try_to_string(&self, manifest: &Manifest) -> Result<String, ManifestError> {
