@@ -18,7 +18,7 @@ use crate::error::ChecksumError;
 /// The delimiter used to separate the checksum algorithm and the digest.
 const CHECKSUM_DELIMITER: char = ';';
 /// The default chunk size used to read files.
-const DEFAULT_CHUNK_SIZE: u64 = 8192;
+pub const DEFAULT_CHUNK_SIZE: u64 = 8192;
 
 /// Defines the checksum algorithms supported by this library.
 #[derive(

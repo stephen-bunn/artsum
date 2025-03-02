@@ -49,8 +49,8 @@ pub struct Manifest {
     /// Optional version of the manifest file.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<u8>,
-    /// A map of checksums to artifact file paths.
-    pub artifacts: HashMap<Checksum, String>,
+    /// A map of file paths to their checksums.
+    pub artifacts: HashMap<String, Checksum>,
 }
 
 /// A source for a manifest file.

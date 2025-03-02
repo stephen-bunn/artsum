@@ -23,6 +23,7 @@ pub struct GenerateOptions {
     pub output: Option<PathBuf>,
     pub algorithm: Option<ChecksumAlgorithm>,
     pub format: Option<ManifestFormat>,
+    pub chunk_size: u64,
     pub max_workers: usize,
     pub verbosity: u8,
 }
@@ -83,8 +84,11 @@ enum DisplayMessage {
     Result(GenerateChecksumResult),
     Error(GenerateChecksumError),
     Progress(GenerateChecksumProgress),
-    Sync(tokio::sync::oneshot::Sender<()>),
-    Exit(GenerateChecksumProgress),
+    Exit {
+        sync: tokio::sync::oneshot::Sender<()>,
+        progress: GenerateChecksumProgress,
+        filename: String,
+    },
 }
 
 pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
@@ -119,12 +123,14 @@ pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
                     print!("{}", progress);
                     progress_visible = true;
                 }
-                DisplayMessage::Sync(sender) => {
-                    sender.send(()).unwrap();
-                }
-                DisplayMessage::Exit(progress) => {
+                DisplayMessage::Exit {
+                    sync,
+                    progress,
+                    filename,
+                } => {
                     print!("\r\x1B[K");
-                    println!("{}", progress);
+                    println!("{} {}", progress, filename);
+                    sync.send(()).unwrap();
                     break;
                 }
             }
@@ -189,7 +195,8 @@ pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
                     .expect("Failed to acquire worker permit");
 
                 let filepath = path.to_string_lossy().to_string();
-                let checksum = Checksum::from_file(&path, &algorithm, None, None).await;
+                let checksum =
+                    Checksum::from_file(&path, &algorithm, Some(options.chunk_size), None).await;
                 match checksum {
                     Ok(checksum) => Ok(GenerateChecksumResult { checksum, filepath }),
                     Err(error) => Err(GenerateChecksumError {
@@ -206,7 +213,7 @@ pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
     let success_counter = success_count.clone();
     let error_counter = error_count.clone();
 
-    let mut artifacts = HashMap::<Checksum, String>::new();
+    let mut artifacts = HashMap::<String, Checksum>::new();
     for handle in checksum_handles {
         let result = handle.await?;
         match result {
@@ -224,7 +231,7 @@ pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
                             .await?;
                     }
                     success_counter.fetch_add(1, Ordering::Relaxed);
-                    artifacts.insert(checksum, relative_filepath.to_string_lossy().to_string());
+                    artifacts.insert(relative_filepath.to_string_lossy().to_string(), checksum);
                 } else {
                     error_counter.fetch_add(1, Ordering::Relaxed);
                     display_tx
@@ -255,15 +262,19 @@ pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
     .await?;
 
     let (sync_tx, sync_rx) = tokio::sync::oneshot::channel::<()>();
-    display_tx.send(DisplayMessage::Sync(sync_tx)).await?;
-    sync_rx.await?;
-    display_progress_task.abort();
     display_tx
-        .send(DisplayMessage::Exit(GenerateChecksumProgress {
-            success: success_count.load(Ordering::Relaxed),
-            error: error_count.load(Ordering::Relaxed),
-        }))
+        .send(DisplayMessage::Exit {
+            sync: sync_tx,
+            progress: GenerateChecksumProgress {
+                success: success_count.load(Ordering::Relaxed),
+                error: error_count.load(Ordering::Relaxed),
+            },
+            filename: manifest_filepath.to_string_lossy().to_string(),
+        })
         .await?;
+
+    display_progress_task.abort();
+    sync_rx.await?;
 
     Ok(())
 }

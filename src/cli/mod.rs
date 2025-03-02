@@ -5,7 +5,10 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use crate::{checksum::ChecksumAlgorithm, manifest::ManifestFormat};
+use crate::{
+    checksum::{ChecksumAlgorithm, DEFAULT_CHUNK_SIZE},
+    manifest::ManifestFormat,
+};
 
 #[derive(Debug, Parser)]
 #[command(arg_required_else_help = true)]
@@ -36,9 +39,15 @@ pub enum Commands {
         /// Format of the manifest file
         #[arg(short, long, default_value = "sfv")]
         format: Option<ManifestFormat>,
+        /// Chunk size to use for generating checksums
+        #[arg(short, long, default_value_t = DEFAULT_CHUNK_SIZE)]
+        chunk_size: u64,
         /// Maximum number of workers to use
         #[arg(short = 'x', long = "max-workers", default_value = "8")]
         max_workers: usize,
+        /// Verbosity level
+        #[arg(short, long, action = clap::ArgAction::Count)]
+        verbosity: Option<u8>,
     },
 
     /// Verify a manifest file in the given directory
@@ -46,9 +55,15 @@ pub enum Commands {
         /// Path to the directory containing the manifest file
         #[arg(value_parser = clap::value_parser!(PathBuf))]
         dirpath: PathBuf,
+        /// Chunk size to use for generating checksums
+        #[arg(short, long, default_value_t = DEFAULT_CHUNK_SIZE)]
+        chunk_size: u64,
         /// Maximum number of workers to use
         #[arg(short = 'x', long = "max-workers", default_value = "8")]
         max_workers: usize,
+        /// Verbosity level
+        #[arg(short, long, action = clap::ArgAction::Count)]
+        verbosity: Option<u8>,
     },
 }
 
@@ -64,26 +79,32 @@ pub async fn cli() -> anyhow::Result<()> {
             output,
             algorithm,
             format,
+            chunk_size,
             max_workers,
+            verbosity,
         }) => {
             generate::generate(generate::GenerateOptions {
                 dirpath,
                 output,
                 algorithm,
                 format,
+                chunk_size,
                 max_workers,
-                verbosity: args.verbosity,
+                verbosity: verbosity.unwrap_or(args.verbosity),
             })
             .await?;
         }
         Some(Commands::Verify {
             dirpath,
+            chunk_size,
             max_workers,
+            verbosity,
         }) => {
             verify::verify(verify::VerifyOptions {
                 dirpath,
+                chunk_size,
                 max_workers,
-                verbosity: args.verbosity,
+                verbosity: verbosity.unwrap_or(args.verbosity),
             })
             .await?;
         }
