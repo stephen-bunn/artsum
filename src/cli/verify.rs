@@ -309,5 +309,9 @@ pub async fn verify(options: VerifyOptions) -> Result<(), anyhow::Error> {
     display_progress_task.abort();
     sync_rx.await?;
 
+    if (invalid_count.load(Ordering::Relaxed)) > 0 {
+        std::process::exit(1);
+    }
+
     Ok(())
 }
