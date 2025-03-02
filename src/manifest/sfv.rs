@@ -1,8 +1,13 @@
-use super::{Manifest, ManifestFormat, ManifestParser};
-use crate::error::ManifestError;
+use std::{
+    env::current_dir,
+    path::{Path, PathBuf},
+};
+
 use async_trait::async_trait;
-use std::path::{Path, PathBuf};
 use toml;
+
+use super::{Manifest, ManifestParser, ManifestSource};
+use crate::error::ManifestError;
 
 pub const SFV_FILENAME: &str = "sfv.toml";
 pub struct SFVParser {}
@@ -15,11 +20,12 @@ impl Default for SFVParser {
 
 #[async_trait]
 impl ManifestParser for SFVParser {
-    fn get_format(&self) -> ManifestFormat {
-        ManifestFormat::SFV
+    fn build_manifest_filepath(&self, dirpath: Option<&Path>) -> PathBuf {
+        let working_dir = current_dir().unwrap();
+        dirpath.unwrap_or(working_dir.as_path()).join(SFV_FILENAME)
     }
 
-    fn get_manifest_file(&self, dirpath: &Path) -> Option<PathBuf> {
+    fn try_get_manifest_filepath(&self, dirpath: &Path) -> Option<PathBuf> {
         if !dirpath.is_dir() {
             return None;
         }
@@ -40,18 +46,26 @@ impl ManifestParser for SFVParser {
     }
 
     fn can_handle_dir(&self, dirpath: &Path) -> bool {
-        if let Some(manifest_file) = self.get_manifest_file(dirpath) {
+        if let Some(manifest_file) = self.try_get_manifest_filepath(dirpath) {
             return self.can_handle_file(&manifest_file);
         }
 
         false
     }
 
-    async fn parse(&self, data: &str) -> Result<Manifest, ManifestError> {
+    async fn from_str(&self, data: &str) -> Result<Manifest, ManifestError> {
         toml::from_str(data).map_err(|e| ManifestError::DeserializeError(e))
     }
 
-    async fn try_to_string(&self, manifest: &Manifest) -> Result<String, ManifestError> {
+    async fn from_manifest_source(
+        &self,
+        manifest_source: &ManifestSource,
+    ) -> Result<Manifest, ManifestError> {
+        self.from_str(&std::fs::read_to_string(&manifest_source.filepath)?)
+            .await
+    }
+
+    async fn to_string(&self, manifest: &Manifest) -> Result<String, ManifestError> {
         toml::to_string(manifest).map_err(|e| ManifestError::SerializeError(e))
     }
 }

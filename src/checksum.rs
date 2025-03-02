@@ -1,14 +1,19 @@
-use crate::error::ChecksumError;
+use std::{
+    fmt::Display,
+    io::{Error, ErrorKind},
+    path::Path,
+};
+
 use crc32fast::Hasher as Crc32;
 use md5::Context as Md5;
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use sha2::{Digest as _, Sha256, Sha512};
-use std::io::{Error, ErrorKind};
-use std::path::Path;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use xxhash_rust::{xxh3::Xxh3, xxh32::Xxh32, xxh64::Xxh64};
+
+use crate::error::ChecksumError;
 
 /// The delimiter used to separate the checksum algorithm and the digest.
 const CHECKSUM_DELIMITER: char = ';';
@@ -40,7 +45,7 @@ pub enum ChecksumAlgorithm {
 }
 
 impl Default for ChecksumAlgorithm {
-    /// Returns the default checksum algorithm, which is XXH3.
+    /// Returns the default checksum algorithm.
     fn default() -> Self {
         ChecksumAlgorithm::XXH3
     }
@@ -61,10 +66,16 @@ impl ChecksumAlgorithm {
 }
 
 /// Defines a checksum, which is a pair of an algorithm and a digest.
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub struct Checksum {
     pub algorithm: ChecksumAlgorithm,
     pub digest: String,
+}
+
+impl Display for Checksum {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}{}{}", self.algorithm, CHECKSUM_DELIMITER, self.digest)
+    }
 }
 
 impl Serialize for Checksum {
@@ -102,11 +113,6 @@ impl Checksum {
         Ok(Checksum { algorithm, digest })
     }
 
-    /// Converts the checksum to a string, which is in the format '<algorithm>;<digest>'.
-    pub fn to_string(&self) -> String {
-        format!("{}{}{}", self.algorithm, CHECKSUM_DELIMITER, self.digest)
-    }
-
     /// Calculates the checksum of a file using the specified algorithm.
     pub async fn from_file(
         filepath: &Path,
@@ -124,6 +130,7 @@ impl Checksum {
     }
 
     /// Verifies the checksum of a file using the currenc checksum.
+    #[allow(dead_code)]
     pub async fn verify_file(
         &self,
         filepath: &Path,

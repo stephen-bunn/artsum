@@ -1,8 +1,17 @@
 mod checksum;
+mod cli;
 mod error;
+mod manifest;
+
+use colored::Colorize;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    println!("Hello World");
-    Ok(())
+    match cli::cli().await {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            eprintln!("{}: {}", "Error".red().bold(), e);
+            std::process::exit(1);
+        }
+    }
 }
