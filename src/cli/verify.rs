@@ -91,21 +91,30 @@ pub struct VerifyChecksumProgress {
     pub missing: usize,
 }
 
+// test
 impl Display for VerifyChecksumProgress {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} {} {} {}",
-            format!("{} valid", self.valid).green(),
-            format!("{} invalid", self.invalid).red().bold(),
-            format!("{} missing", self.missing).yellow(),
+        let mut parts = vec![format!("{} valid", self.valid).green().to_string()];
+
+        if self.invalid > 0 {
+            parts.push(format!("{} invalid", self.invalid).red().bold().to_string());
+        }
+
+        if self.missing > 0 {
+            parts.push(format!("{} missing", self.missing).yellow().to_string());
+        }
+
+        parts.push(
             format!(
                 "[{}/{}]",
                 self.valid + self.invalid + self.missing,
                 self.total
             )
-            .dimmed(),
-        )
+            .dimmed()
+            .to_string(),
+        );
+
+        write!(f, "{}", parts.join(" "))
     }
 }
 
