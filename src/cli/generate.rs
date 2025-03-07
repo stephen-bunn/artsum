@@ -70,6 +70,11 @@ struct GenerateChecksumProgress {
     error: usize,
 }
 
+struct GenerateChecksumCounters {
+    success: Arc<AtomicUsize>,
+    error: Arc<AtomicUsize>,
+}
+
 impl Display for GenerateChecksumProgress {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}", format!("{} generated", self.success).green())?;
@@ -91,6 +96,43 @@ enum DisplayMessage {
     },
 }
 
+async fn run_display_worker(
+    mut display_rx: tokio::sync::mpsc::Receiver<DisplayMessage>,
+) -> Result<(), anyhow::Error> {
+    let mut progress_visible = false;
+    while let Some(msg) = display_rx.recv().await {
+        if progress_visible {
+            print!("\r\x1B[K");
+            progress_visible = false;
+        }
+        match msg {
+            DisplayMessage::Result(result) => {
+                println!("{}", result);
+            }
+            DisplayMessage::Error(error) => {
+                println!("{}", error);
+            }
+            DisplayMessage::Progress(progress) => {
+                print!("{}", progress);
+                progress_visible = true;
+            }
+            DisplayMessage::Exit {
+                sync,
+                progress,
+                filename,
+            } => {
+                print!("\r\x1B[K");
+                println!("{} {}", progress, filename);
+                sync.send(()).unwrap();
+                break;
+            }
+        }
+        std::io::stdout().flush().unwrap();
+    }
+
+    Ok(())
+}
+
 pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
     if !options.dirpath.is_dir() {
         return Err(anyhow::anyhow!("Directory does not exist"));
@@ -104,46 +146,17 @@ pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
         .output
         .unwrap_or(manifest_parser.build_manifest_filepath(Some(&options.dirpath)));
 
-    let (display_tx, mut display_rx) = tokio::sync::mpsc::channel::<DisplayMessage>(100);
-    tokio::spawn(async move {
-        let mut progress_visible = false;
-        while let Some(msg) = display_rx.recv().await {
-            if progress_visible {
-                print!("\r\x1B[K");
-                progress_visible = false;
-            }
-            match msg {
-                DisplayMessage::Result(result) => {
-                    println!("{}", result);
-                }
-                DisplayMessage::Error(error) => {
-                    println!("{}", error);
-                }
-                DisplayMessage::Progress(progress) => {
-                    print!("{}", progress);
-                    progress_visible = true;
-                }
-                DisplayMessage::Exit {
-                    sync,
-                    progress,
-                    filename,
-                } => {
-                    print!("\r\x1B[K");
-                    println!("{} {}", progress, filename);
-                    sync.send(()).unwrap();
-                    break;
-                }
-            }
-            std::io::stdout().flush().unwrap();
-        }
-    });
+    let (display_tx, display_rx) = tokio::sync::mpsc::channel::<DisplayMessage>(100);
+    tokio::spawn(run_display_worker(display_rx));
 
-    let success_count = Arc::new(AtomicUsize::new(0));
-    let error_count = Arc::new(AtomicUsize::new(0));
+    let counters = GenerateChecksumCounters {
+        success: Arc::new(AtomicUsize::new(0)),
+        error: Arc::new(AtomicUsize::new(0)),
+    };
 
     let progress_display_tx = display_tx.clone();
-    let progress_success_count = success_count.clone();
-    let progress_error_count = error_count.clone();
+    let progress_success_count = counters.success.clone();
+    let progress_error_count = counters.error.clone();
     let display_progress_task = tokio::spawn(async move {
         let mut last_progress = 0;
         let mut interval = tokio::time::interval(Duration::from_millis(10));
@@ -210,8 +223,8 @@ pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
         }
     }
 
-    let success_counter = success_count.clone();
-    let error_counter = error_count.clone();
+    let success_counter = counters.success.clone();
+    let error_counter = counters.error.clone();
 
     let mut artifacts = HashMap::<String, Checksum>::new();
     for handle in checksum_handles {
@@ -266,8 +279,8 @@ pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
         .send(DisplayMessage::Exit {
             sync: sync_tx,
             progress: GenerateChecksumProgress {
-                success: success_count.load(Ordering::Relaxed),
-                error: error_count.load(Ordering::Relaxed),
+                success: counters.success.load(Ordering::Relaxed),
+                error: counters.error.load(Ordering::Relaxed),
             },
             filename: manifest_filepath.to_string_lossy().to_string(),
         })

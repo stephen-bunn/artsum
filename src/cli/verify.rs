@@ -1,3 +1,6 @@
+//! Verify command implementation for SFV.
+//!
+//! This module handles verifying checksums of files in a directory against a manifest file.
 use std::{
     fmt::Display,
     io::Write,
@@ -13,6 +16,7 @@ use colored::Colorize;
 
 use crate::{checksum::Checksum, manifest::ManifestSource};
 
+/// Options for the verify command
 pub struct VerifyOptions {
     /// Path to the directory containing the files to verify
     pub dirpath: PathBuf,
@@ -24,6 +28,7 @@ pub struct VerifyOptions {
     pub verbosity: u8,
 }
 
+/// Represents the status of a checksum verification
 pub enum VerifyChecksumStatus {
     Valid,
     Invalid,
@@ -40,6 +45,7 @@ impl VerifyChecksumStatus {
     }
 }
 
+/// Represents the result of a checksum verification
 pub struct VerifyChecksumResult {
     pub status: VerifyChecksumStatus,
     pub actual: Option<Checksum>,
@@ -84,14 +90,20 @@ impl Display for VerifyChecksumResult {
     }
 }
 
-pub struct VerifyChecksumProgress {
+/// Represents the progress of checksum verification
+struct VerifyChecksumProgress {
     pub total: usize,
     pub valid: usize,
     pub invalid: usize,
     pub missing: usize,
 }
 
-// test
+struct VerifyChecksumCounters {
+    pub valid: Arc<AtomicUsize>,
+    pub invalid: Arc<AtomicUsize>,
+    pub missing: Arc<AtomicUsize>,
+}
+
 impl Display for VerifyChecksumProgress {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut parts = vec![format!("{} valid", self.valid).green().to_string()];
@@ -118,6 +130,7 @@ impl Display for VerifyChecksumProgress {
     }
 }
 
+/// Messages to display to the user
 enum DisplayMessage {
     Result(VerifyChecksumResult),
     Progress(VerifyChecksumProgress),
@@ -127,6 +140,42 @@ enum DisplayMessage {
     },
 }
 
+/// Worker task to display messages to the user
+async fn run_display_worker(
+    mut display_rx: tokio::sync::mpsc::Receiver<DisplayMessage>,
+) -> Result<(), anyhow::Error> {
+    let mut progress_visible = false;
+    while let Some(msg) = display_rx.recv().await {
+        if progress_visible {
+            print!("\r\x1B[K");
+            progress_visible = false;
+        }
+        match msg {
+            DisplayMessage::Result(result) => {
+                println!("{}", result);
+            }
+            DisplayMessage::Progress(progress) => {
+                print!("{}", progress.to_string());
+                progress_visible = true;
+            }
+            DisplayMessage::Exit { sync, progress } => {
+                print!("\r\x1B[K");
+                println!("{}", progress);
+                sync.send(()).unwrap();
+                break;
+            }
+        }
+        std::io::stdout().flush().unwrap();
+    }
+
+    Ok(())
+}
+
+/// Verifies checksums of files in a directory against a manifest file.
+///
+/// ## Errors
+///
+/// Returns an error if the directory does not exist or if no manifest file is found.
 pub async fn verify(options: VerifyOptions) -> Result<(), anyhow::Error> {
     if !options.dirpath.is_dir() {
         return Err(anyhow::anyhow!(
@@ -160,41 +209,18 @@ pub async fn verify(options: VerifyOptions) -> Result<(), anyhow::Error> {
         .collect();
 
     let total_count = artifacts.len();
-    let valid_count = Arc::new(AtomicUsize::new(0));
-    let invalid_count = Arc::new(AtomicUsize::new(0));
-    let missing_count = Arc::new(AtomicUsize::new(0));
+    let counters = VerifyChecksumCounters {
+        valid: Arc::new(AtomicUsize::new(0)),
+        invalid: Arc::new(AtomicUsize::new(0)),
+        missing: Arc::new(AtomicUsize::new(0)),
+    };
 
-    let report_valid = valid_count.clone();
-    let report_invalid = invalid_count.clone();
-    let report_missing = missing_count.clone();
+    let (display_tx, display_rx) = tokio::sync::mpsc::channel::<DisplayMessage>(10000);
+    tokio::spawn(run_display_worker(display_rx));
 
-    let (display_tx, mut display_rx) = tokio::sync::mpsc::channel::<DisplayMessage>(10000);
-    tokio::spawn(async move {
-        let mut progress_visible = false;
-        while let Some(msg) = display_rx.recv().await {
-            if progress_visible {
-                print!("\r\x1B[K");
-                progress_visible = false;
-            }
-            match msg {
-                DisplayMessage::Result(result) => {
-                    println!("{}", result);
-                }
-                DisplayMessage::Progress(progress) => {
-                    print!("{}", progress.to_string());
-                    progress_visible = true;
-                }
-                DisplayMessage::Exit { sync, progress } => {
-                    print!("\r\x1B[K");
-                    println!("{}", progress);
-                    sync.send(()).unwrap();
-                    break;
-                }
-            }
-            std::io::stdout().flush().unwrap();
-        }
-    });
-
+    let valid_counter = counters.valid.clone();
+    let invalid_counter = counters.invalid.clone();
+    let missing_counter = counters.missing.clone();
     let progress_display_tx = display_tx.clone();
     let display_progress_task = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(10));
@@ -203,9 +229,9 @@ pub async fn verify(options: VerifyOptions) -> Result<(), anyhow::Error> {
             progress_display_tx
                 .send(DisplayMessage::Progress(VerifyChecksumProgress {
                     total: total_count,
-                    valid: report_valid.load(Ordering::Relaxed),
-                    invalid: report_invalid.load(Ordering::Relaxed),
-                    missing: report_missing.load(Ordering::Relaxed),
+                    valid: valid_counter.load(Ordering::Relaxed),
+                    invalid: invalid_counter.load(Ordering::Relaxed),
+                    missing: missing_counter.load(Ordering::Relaxed),
                 }))
                 .await
                 .unwrap();
@@ -214,9 +240,9 @@ pub async fn verify(options: VerifyOptions) -> Result<(), anyhow::Error> {
 
     let worker_semaphore = Arc::new(tokio::sync::Semaphore::new(options.max_workers));
     for (filename, checksum) in artifacts {
-        let valid_counter = valid_count.clone();
-        let invalid_counter = invalid_count.clone();
-        let missing_counter = missing_count.clone();
+        let valid_counter = counters.valid.clone();
+        let invalid_counter = counters.invalid.clone();
+        let missing_counter = counters.missing.clone();
 
         let worker_permit = worker_semaphore.clone();
         let filepath = options.dirpath.join(&filename);
@@ -267,29 +293,16 @@ pub async fn verify(options: VerifyOptions) -> Result<(), anyhow::Error> {
     let result_display_tx = display_tx.clone();
     for handle in verify_handles {
         let result = handle.await??;
-        match result.status {
-            VerifyChecksumStatus::Invalid => {
-                result_display_tx
-                    .send(DisplayMessage::Result(result))
-                    .await
-                    .unwrap();
-            }
-            VerifyChecksumStatus::Missing => {
-                if options.verbosity >= 1 {
-                    result_display_tx
-                        .send(DisplayMessage::Result(result))
-                        .await
-                        .unwrap();
-                }
-            }
-            VerifyChecksumStatus::Valid => {
-                if options.verbosity >= 2 {
-                    result_display_tx
-                        .send(DisplayMessage::Result(result))
-                        .await
-                        .unwrap();
-                }
-            }
+        let should_display = match result.status {
+            VerifyChecksumStatus::Invalid => true,
+            VerifyChecksumStatus::Missing => options.verbosity >= 1,
+            VerifyChecksumStatus::Valid => options.verbosity >= 2,
+        };
+
+        if should_display {
+            result_display_tx
+                .send(DisplayMessage::Result(result))
+                .await?;
         }
     }
 
@@ -299,9 +312,9 @@ pub async fn verify(options: VerifyOptions) -> Result<(), anyhow::Error> {
             sync: sync_tx,
             progress: VerifyChecksumProgress {
                 total: total_count,
-                valid: valid_count.load(Ordering::Relaxed),
-                invalid: invalid_count.load(Ordering::Relaxed),
-                missing: missing_count.load(Ordering::Relaxed),
+                valid: counters.valid.load(Ordering::Relaxed),
+                invalid: counters.invalid.load(Ordering::Relaxed),
+                missing: counters.missing.load(Ordering::Relaxed),
             },
         })
         .await?;
@@ -309,7 +322,7 @@ pub async fn verify(options: VerifyOptions) -> Result<(), anyhow::Error> {
     display_progress_task.abort();
     sync_rx.await?;
 
-    if (invalid_count.load(Ordering::Relaxed)) > 0 {
+    if counters.invalid.load(Ordering::Relaxed) > 0 {
         std::process::exit(1);
     }
 
