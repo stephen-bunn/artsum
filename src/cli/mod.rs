@@ -1,17 +1,16 @@
 mod generate;
 mod verify;
 
-use std::path::PathBuf;
+use std::{env::current_dir, path::PathBuf, thread};
 
-use clap::{Parser, Subcommand};
+use clap::Parser;
 
 use crate::{
     checksum::{ChecksumAlgorithm, DEFAULT_CHUNK_SIZE},
     manifest::ManifestFormat,
 };
 
-#[derive(Debug, Parser)]
-#[command(arg_required_else_help = true)]
+#[derive(Debug, clap::Parser)]
 pub struct Cli {
     #[clap(subcommand)]
     pub command: Option<Commands>,
@@ -23,7 +22,7 @@ pub struct Cli {
     pub no_color: bool,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, clap::Subcommand)]
 pub enum Commands {
     /// Generate a new manifest
     Generate {
@@ -33,7 +32,7 @@ pub enum Commands {
         #[arg(short, long, default_value = None)]
         /// Path to output the manifest file to
         output: Option<PathBuf>,
-        #[arg(short, long, default_value = "xxh3")]
+        #[arg(short, long, default_value = None)]
         /// Algorithm to use for checksum calculation
         algorithm: Option<ChecksumAlgorithm>,
         /// Format of the manifest file
@@ -108,7 +107,15 @@ pub async fn cli() -> anyhow::Result<()> {
             })
             .await?;
         }
-        None => {}
+        None => {
+            verify::verify(verify::VerifyOptions {
+                dirpath: current_dir().unwrap(),
+                chunk_size: DEFAULT_CHUNK_SIZE,
+                max_workers: thread::available_parallelism()?.get(),
+                verbosity: args.verbosity,
+            })
+            .await?
+        }
     }
 
     Ok(())

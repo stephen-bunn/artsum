@@ -6,10 +6,8 @@ use std::{
 
 use crc32fast::Hasher as Crc32;
 use md5::Context as Md5;
-use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use sha2::{Digest as _, Sha256, Sha512};
-use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use xxhash_rust::{xxh3::Xxh3, xxh32::Xxh32, xxh64::Xxh64};
 
@@ -78,7 +76,7 @@ impl Display for Checksum {
     }
 }
 
-impl Serialize for Checksum {
+impl serde::Serialize for Checksum {
     /// Serializes the checksum to a string, which is in the format '<algorithm>;<digest>'.
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -88,7 +86,7 @@ impl Serialize for Checksum {
     }
 }
 
-impl<'de> Deserialize<'de> for Checksum {
+impl<'de> serde::Deserialize<'de> for Checksum {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -165,7 +163,7 @@ where
         ));
     }
 
-    let mut file = File::open(filepath).await?;
+    let mut file = tokio::fs::File::open(filepath).await?;
     let total_size = file.metadata().await?.len();
     let mut total_read = 0;
     let report_progress = progress_callback.unwrap_or(|_, _| {});

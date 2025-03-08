@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use toml;
 
 use super::{Manifest, ManifestParser, ManifestSource};
-use crate::error::ManifestError;
+use crate::{checksum::ChecksumAlgorithm, error::ManifestError};
 
 pub const SFV_FILENAME: &str = "sfv.toml";
 pub struct SFVParser {}
@@ -20,12 +20,16 @@ impl Default for SFVParser {
 
 #[async_trait]
 impl ManifestParser for SFVParser {
+    fn algorithm(&self) -> Option<ChecksumAlgorithm> {
+        None
+    }
+
     fn build_manifest_filepath(&self, dirpath: Option<&Path>) -> PathBuf {
         let working_dir = current_dir().unwrap();
         dirpath.unwrap_or(working_dir.as_path()).join(SFV_FILENAME)
     }
 
-    fn try_get_manifest_filepath(&self, dirpath: &Path) -> Option<PathBuf> {
+    fn get_manifest_filepath(&self, dirpath: &Path) -> Option<PathBuf> {
         if !dirpath.is_dir() {
             return None;
         }
@@ -46,7 +50,7 @@ impl ManifestParser for SFVParser {
     }
 
     fn can_handle_dir(&self, dirpath: &Path) -> bool {
-        if let Some(manifest_file) = self.try_get_manifest_filepath(dirpath) {
+        if let Some(manifest_file) = self.get_manifest_filepath(dirpath) {
             return self.can_handle_file(&manifest_file);
         }
 

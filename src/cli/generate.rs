@@ -18,13 +18,21 @@ use crate::{
     manifest::{Manifest, ManifestFormat, ManifestParser},
 };
 
+/// Options for generating checksums
 pub struct GenerateOptions {
+    /// Path to the directory to generate checksums for
     pub dirpath: PathBuf,
+    /// Optional output file path for the manifest
     pub output: Option<PathBuf>,
+    /// Optional checksum algorithm to use
     pub algorithm: Option<ChecksumAlgorithm>,
+    /// Optional format for the manifest
     pub format: Option<ManifestFormat>,
+    /// Size of chunks to use when calculating checksums
     pub chunk_size: u64,
+    /// Maximum number of worker threads to use for checksum calculation
     pub max_workers: usize,
+    /// Verbosity level for output
     pub verbosity: u8,
 }
 
@@ -77,7 +85,7 @@ struct GenerateChecksumCounters {
 
 impl Display for GenerateChecksumProgress {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", format!("{} generated", self.success).green())?;
+        write!(f, "{}", format!("{} added", self.success).green())?;
         if self.error > 0 {
             write!(f, " {}", format!("{} errors", self.error).red())?;
         }
@@ -86,13 +94,18 @@ impl Display for GenerateChecksumProgress {
 }
 
 enum DisplayMessage {
+    Start {
+        format: ManifestFormat,
+        algorithm: ChecksumAlgorithm,
+        filepath: PathBuf,
+    },
     Result(GenerateChecksumResult),
     Error(GenerateChecksumError),
     Progress(GenerateChecksumProgress),
     Exit {
         sync: tokio::sync::oneshot::Sender<()>,
         progress: GenerateChecksumProgress,
-        filename: String,
+        filepath: PathBuf,
     },
 }
 
@@ -106,6 +119,22 @@ async fn run_display_worker(
             progress_visible = false;
         }
         match msg {
+            DisplayMessage::Start {
+                format,
+                algorithm,
+                filepath,
+            } => {
+                println!(
+                    "{}",
+                    format!(
+                        "Generating {} ({}) to {}",
+                        format,
+                        algorithm,
+                        filepath.display()
+                    )
+                    .dimmed()
+                );
+            }
             DisplayMessage::Result(result) => {
                 println!("{}", result);
             }
@@ -119,10 +148,11 @@ async fn run_display_worker(
             DisplayMessage::Exit {
                 sync,
                 progress,
-                filename,
+                filepath,
             } => {
                 print!("\r\x1B[K");
-                println!("{} {}", progress, filename);
+                println!("{}", progress);
+                println!("{}", filepath.display());
                 sync.send(()).unwrap();
                 break;
             }
@@ -138,16 +168,26 @@ pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
         return Err(anyhow::anyhow!("Directory does not exist"));
     }
 
+    let (display_tx, display_rx) = tokio::sync::mpsc::channel::<DisplayMessage>(100);
+    tokio::spawn(run_display_worker(display_rx));
+
     let mut checksum_handles = Vec::new();
-    let checksum_algorithm = options.algorithm.unwrap_or_default();
     let manifest_format = options.format.unwrap_or_default();
     let manifest_parser: Box<dyn ManifestParser> = manifest_format.get_parser();
+    let checksum_algorithm = manifest_parser
+        .algorithm()
+        .unwrap_or(options.algorithm.unwrap_or(ChecksumAlgorithm::default()));
     let manifest_filepath = options
         .output
         .unwrap_or(manifest_parser.build_manifest_filepath(Some(&options.dirpath)));
 
-    let (display_tx, display_rx) = tokio::sync::mpsc::channel::<DisplayMessage>(100);
-    tokio::spawn(run_display_worker(display_rx));
+    display_tx
+        .send(DisplayMessage::Start {
+            format: manifest_format,
+            algorithm: checksum_algorithm.clone(),
+            filepath: manifest_filepath.clone(),
+        })
+        .await?;
 
     let counters = GenerateChecksumCounters {
         success: Arc::new(AtomicUsize::new(0)),
@@ -282,7 +322,7 @@ pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
                 success: counters.success.load(Ordering::Relaxed),
                 error: counters.error.load(Ordering::Relaxed),
             },
-            filename: manifest_filepath.to_string_lossy().to_string(),
+            filepath: manifest_filepath.clone(),
         })
         .await?;
 
