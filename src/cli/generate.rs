@@ -13,7 +13,7 @@ use std::{
 use colored::Colorize;
 
 use crate::{
-    checksum::{Checksum, ChecksumAlgorithm},
+    checksum::{Checksum, ChecksumAlgorithm, ChecksumMode},
     error::ChecksumError,
     manifest::{Manifest, ManifestFormat, ManifestParser},
 };
@@ -28,8 +28,10 @@ pub struct GenerateOptions {
     pub algorithm: Option<ChecksumAlgorithm>,
     /// Optional format for the manifest
     pub format: Option<ManifestFormat>,
+    /// Optional checksum mode to use
+    pub mode: Option<ChecksumMode>,
     /// Size of chunks to use when calculating checksums
-    pub chunk_size: u64,
+    pub chunk_size: usize,
     /// Maximum number of worker threads to use for checksum calculation
     pub max_workers: usize,
     /// Verbosity level for output
@@ -177,6 +179,7 @@ pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
     let checksum_algorithm = manifest_parser
         .algorithm()
         .unwrap_or(options.algorithm.unwrap_or(ChecksumAlgorithm::default()));
+    let checksum_mode = options.mode.unwrap_or(ChecksumMode::default());
     let manifest_filepath = options
         .output
         .unwrap_or(manifest_parser.build_manifest_filepath(Some(&options.dirpath)));
@@ -248,8 +251,14 @@ pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
                     .expect("Failed to acquire worker permit");
 
                 let filepath = path.to_string_lossy().to_string();
-                let checksum =
-                    Checksum::from_file(&path, &algorithm, Some(options.chunk_size), None).await;
+                let checksum = Checksum::from_file(
+                    &path,
+                    &algorithm,
+                    Some(checksum_mode),
+                    Some(options.chunk_size),
+                    None,
+                )
+                .await;
                 match checksum {
                     Ok(checksum) => Ok(GenerateChecksumResult { checksum, filepath }),
                     Err(error) => Err(GenerateChecksumError {

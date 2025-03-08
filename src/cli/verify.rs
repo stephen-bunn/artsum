@@ -21,7 +21,7 @@ pub struct VerifyOptions {
     /// Path to the directory containing the files to verify
     pub dirpath: PathBuf,
     /// Chunk size to use for generating checksums
-    pub chunk_size: u64,
+    pub chunk_size: usize,
     /// Maximum number of workers to use
     pub max_workers: usize,
     /// Verbosity level
@@ -267,6 +267,7 @@ pub async fn verify(options: VerifyOptions) -> Result<(), anyhow::Error> {
             let actual = Checksum::from_file(
                 &filepath,
                 &expected.algorithm,
+                Some(expected.mode),
                 Some(options.chunk_size),
                 None,
             )

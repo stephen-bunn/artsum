@@ -5,7 +5,7 @@ use regex::Regex;
 
 use super::{Manifest, ManifestParser, ManifestSource};
 use crate::{
-    checksum::{Checksum, ChecksumAlgorithm},
+    checksum::{Checksum, ChecksumAlgorithm, ChecksumMode},
     error::ManifestError,
 };
 
@@ -60,13 +60,20 @@ impl ManifestParser for MD5SUMParser {
                 continue;
             }
 
+            let mode = if line.contains("  ") {
+                ChecksumMode::Text
+            } else {
+                ChecksumMode::Binary
+            };
+
             // Destructure the parts into digest and path
             let (digest, path) = (parts[0], parts[1]);
             let checksum = Checksum {
+                mode,
                 algorithm: ChecksumAlgorithm::MD5,
                 digest: digest.to_string(),
             };
-            artifacts.insert(path.to_string(), checksum);
+            artifacts.insert(path.trim_start_matches('*').to_string(), checksum);
         }
 
         Ok(Manifest {
@@ -79,7 +86,11 @@ impl ManifestParser for MD5SUMParser {
         let mut lines = Vec::new();
 
         for (path, checksum) in manifest.artifacts.iter() {
-            lines.push(format!("{} {}", checksum.digest, path));
+            if checksum.mode == ChecksumMode::Text {
+                lines.push(format!("{}  {}", checksum.digest, path));
+            } else {
+                lines.push(format!("{} {}", checksum.digest, path));
+            }
         }
 
         Ok(lines.join("\n"))

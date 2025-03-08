@@ -6,7 +6,7 @@ use std::{env::current_dir, path::PathBuf, thread};
 use clap::Parser;
 
 use crate::{
-    checksum::{ChecksumAlgorithm, DEFAULT_CHUNK_SIZE},
+    checksum::{ChecksumAlgorithm, ChecksumMode, DEFAULT_CHUNK_SIZE},
     manifest::ManifestFormat,
 };
 
@@ -38,9 +38,12 @@ pub enum Commands {
         /// Format of the manifest file
         #[arg(short, long, default_value = "sfv")]
         format: Option<ManifestFormat>,
+        #[arg(short, long, default_value = "binary")]
+        /// Checksum mode to use for generating checksums
+        mode: Option<ChecksumMode>,
         /// Chunk size to use for generating checksums
         #[arg(short, long, default_value_t = DEFAULT_CHUNK_SIZE)]
-        chunk_size: u64,
+        chunk_size: usize,
         /// Maximum number of workers to use
         #[arg(short = 'x', long = "max-workers", default_value = "8")]
         max_workers: usize,
@@ -56,7 +59,7 @@ pub enum Commands {
         dirpath: PathBuf,
         /// Chunk size to use for generating checksums
         #[arg(short, long, default_value_t = DEFAULT_CHUNK_SIZE)]
-        chunk_size: u64,
+        chunk_size: usize,
         /// Maximum number of workers to use
         #[arg(short = 'x', long = "max-workers", default_value = "8")]
         max_workers: usize,
@@ -78,6 +81,7 @@ pub async fn cli() -> anyhow::Result<()> {
             output,
             algorithm,
             format,
+            mode,
             chunk_size,
             max_workers,
             verbosity,
@@ -87,6 +91,7 @@ pub async fn cli() -> anyhow::Result<()> {
                 output,
                 algorithm,
                 format,
+                mode,
                 chunk_size,
                 max_workers,
                 verbosity: verbosity.unwrap_or(args.verbosity),

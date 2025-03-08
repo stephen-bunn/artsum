@@ -14,6 +14,9 @@ pub enum ChecksumError {
     /// Occurs when attempting to use a checksum algorithm that is not supported
     #[error("Unsupported checksum algorithm {0}")]
     UnsupportedAlgorithm(String),
+
+    #[error("Unsupported checksum mode {0}")]
+    UnsupportedMode(String),
 }
 
 /// Known errors for manifest operations.
