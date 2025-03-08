@@ -195,7 +195,7 @@ pub async fn verify(options: VerifyOptions) -> Result<(), anyhow::Error> {
     let manifest_source = manifest_source.unwrap();
     let manifest_parser = manifest_source.get_parser();
     let manifest = manifest_parser
-        .from_manifest_source(&manifest_source)
+        .parse_manifest_source(&manifest_source)
         .await?;
 
     let mut verify_handles: Vec<
@@ -252,7 +252,7 @@ pub async fn verify(options: VerifyOptions) -> Result<(), anyhow::Error> {
             let _permit = worker_permit
                 .acquire()
                 .await
-                .expect("Failed to accquire worker permit");
+                .expect("Failed to acquire worker permit");
 
             if !filepath.is_file() {
                 missing_counter.fetch_add(1, Ordering::Relaxed);

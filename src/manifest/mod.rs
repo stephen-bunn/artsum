@@ -2,9 +2,11 @@ pub mod sfv;
 
 use std::{
     collections::HashMap,
+    env::current_dir,
     path::{Path, PathBuf},
 };
 
+use async_trait::async_trait;
 use strum::IntoEnumIterator;
 
 use crate::{
@@ -75,13 +77,13 @@ impl ManifestSource {
         for format in ManifestFormat::iter() {
             let parser = format.get_parser();
 
-            if resolved_path.is_file() && parser.can_handle_file(path) {
+            if resolved_path.is_file() && parser.can_handle_filepath(path) {
                 return Some(ManifestSource {
                     filepath: resolved_path,
                     format,
                 });
-            } else if resolved_path.is_dir() && parser.can_handle_dir(path) {
-                if let Some(manifest_file) = parser.get_manifest_filepath(path) {
+            } else if resolved_path.is_dir() && parser.can_handle_dirpath(path) {
+                if let Some(manifest_file) = parser.find_manifest_filepath(path) {
                     return Some(ManifestSource {
                         filepath: manifest_file.canonicalize().ok()?,
                         format,
@@ -95,31 +97,93 @@ impl ManifestSource {
 }
 
 /// A trait for parsers of manifest files.
-#[async_trait::async_trait]
+#[async_trait]
 pub trait ManifestParser {
+    /// Get the supported filename patterns for the parser.
+    fn filename_patterns(&self) -> &[regex::Regex];
+
+    /// Get the default output filename for the parser.
+    fn default_filename(&self) -> &str;
+
     /// Get the checksum algorithm used by the parser.
     /// If the parser does not use a specific algorithm, return `None`.
     fn algorithm(&self) -> Option<ChecksumAlgorithm>;
 
     /// Build the manifest file path based on the given directory path.
-    fn build_manifest_filepath(&self, dirpath: Option<&Path>) -> PathBuf;
+    fn build_manifest_filepath(&self, dirpath: Option<&Path>) -> PathBuf {
+        let working_dir = current_dir().unwrap();
+        dirpath
+            .unwrap_or(working_dir.as_path())
+            .join(self.default_filename())
+    }
+
+    fn find_supported_filepath(&self, dirpath: &Path) -> Option<PathBuf> {
+        if !dirpath.is_dir() {
+            return None;
+        }
+
+        if let Ok(entries) = glob::glob(dirpath.join("*").to_str().unwrap()) {
+            for entry in entries {
+                if let Ok(path) = entry {
+                    if self.can_handle_filepath(&path) {
+                        return Some(path);
+                    }
+                }
+            }
+        }
+
+        None
+    }
 
     /// Get the path to the manifest file in a directory.
-    fn get_manifest_filepath(&self, dirpath: &Path) -> Option<PathBuf>;
+    fn find_manifest_filepath(&self, dirpath: &Path) -> Option<PathBuf> {
+        if !dirpath.is_dir() {
+            return None;
+        }
+
+        let default_filepath = dirpath.join(self.default_filename());
+        if default_filepath.is_file() {
+            return Some(default_filepath);
+        }
+
+        self.find_supported_filepath(dirpath)
+    }
 
     /// Check if the parser can handle a given file path.
-    fn can_handle_file(&self, filepath: &Path) -> bool;
+    fn can_handle_filepath(&self, filepath: &Path) -> bool {
+        match filepath.file_name() {
+            Some(filename) => {
+                if let Some(filename_str) = filename.to_str() {
+                    for supported_pattern in self.filename_patterns() {
+                        if supported_pattern.is_match(filename_str) {
+                            return true;
+                        }
+                    }
+                }
+
+                return false;
+            }
+            None => false,
+        }
+    }
 
     /// Check if the parser can handle a given directory.
-    fn can_handle_dir(&self, dirpath: &Path) -> bool;
+    fn can_handle_dirpath(&self, dirpath: &Path) -> bool {
+        if let Some(manifest_filepath) = self.find_manifest_filepath(dirpath) {
+            return self.can_handle_filepath(&manifest_filepath);
+        }
 
-    /// Parse a manifest file.
-    async fn from_str(&self, data: &str) -> Result<Manifest, ManifestError>;
+        false
+    }
 
-    async fn from_manifest_source(
+    /// Parse a manifest source.
+    async fn parse_manifest_source(
         &self,
         source: &ManifestSource,
     ) -> Result<Manifest, ManifestError>;
+
+    /// Parse a manifest file.
+    async fn from_str(&self, data: &str) -> Result<Manifest, ManifestError>;
 
     /// Convert a manifest to a string.
     async fn to_string(&self, manifest: &Manifest) -> Result<String, ManifestError>;
