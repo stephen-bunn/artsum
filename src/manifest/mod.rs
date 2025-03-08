@@ -1,3 +1,4 @@
+pub mod md5sum;
 pub mod sfv;
 
 use std::{
@@ -29,6 +30,7 @@ use crate::{
 #[strum(serialize_all = "lowercase")]
 pub enum ManifestFormat {
     SFV,
+    MD5SUM,
 }
 
 impl Default for ManifestFormat {
@@ -42,6 +44,7 @@ impl ManifestFormat {
     pub fn get_parser(&self) -> Box<dyn ManifestParser> {
         match self {
             ManifestFormat::SFV => Box::new(sfv::SFVParser::default()),
+            ManifestFormat::MD5SUM => Box::new(md5sum::MD5SUMParser::default()),
         }
     }
 }
