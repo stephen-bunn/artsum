@@ -14,7 +14,10 @@ use std::{
 
 use colored::Colorize;
 
-use crate::{checksum::Checksum, manifest::ManifestSource};
+use crate::{
+    checksum::{Checksum, ChecksumOptions},
+    manifest::ManifestSource,
+};
 
 /// Options for the verify command
 pub struct VerifyOptions {
@@ -274,13 +277,13 @@ pub async fn verify(options: VerifyOptions) -> Result<(), anyhow::Error> {
                 });
             }
 
-            let actual = Checksum::from_file(
-                &filepath,
-                &expected.algorithm,
-                Some(expected.mode),
-                Some(options.chunk_size),
-                None,
-            )
+            let actual = Checksum::from_file(ChecksumOptions {
+                filepath: filepath.clone(),
+                mode: expected.mode,
+                algorithm: expected.algorithm.clone(),
+                chunk_size: Some(options.chunk_size),
+                progress_callback: None,
+            })
             .await?;
             let status = if actual == expected {
                 valid_counter.fetch_add(1, Ordering::Relaxed);

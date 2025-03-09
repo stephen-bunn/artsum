@@ -13,7 +13,7 @@ use std::{
 use colored::Colorize;
 
 use crate::{
-    checksum::{Checksum, ChecksumAlgorithm, ChecksumMode},
+    checksum::{Checksum, ChecksumAlgorithm, ChecksumMode, ChecksumOptions},
     error::ChecksumError,
     manifest::{Manifest, ManifestFormat, ManifestParser},
 };
@@ -236,13 +236,13 @@ pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
                     .expect("Failed to acquire worker permit");
 
                 let filepath = path.to_string_lossy().to_string();
-                let checksum = Checksum::from_file(
-                    &path,
-                    &algorithm,
-                    Some(checksum_mode),
-                    Some(options.chunk_size),
-                    None,
-                )
+                let checksum = Checksum::from_file(ChecksumOptions {
+                    filepath: path.clone(),
+                    algorithm: algorithm.clone(),
+                    mode: checksum_mode.clone(),
+                    chunk_size: Some(options.chunk_size),
+                    progress_callback: None,
+                })
                 .await;
                 match checksum {
                     Ok(checksum) => Ok(GenerateChecksumResult { checksum, filepath }),

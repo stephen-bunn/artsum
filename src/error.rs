@@ -16,6 +16,7 @@ pub enum ChecksumError {
     UnsupportedAlgorithm(String),
 
     #[error("Unsupported checksum mode {0}")]
+    #[allow(dead_code)]
     UnsupportedMode(String),
 }
 
