@@ -55,9 +55,6 @@ pub enum Commands {
         /// Maximum number of workers to use
         #[arg(short = 'x', long = "max-workers", default_value = "8")]
         max_workers: usize,
-        /// Verbosity level
-        #[arg(short, long, action = clap::ArgAction::Count)]
-        verbosity: Option<u8>,
     },
 
     /// Verify a manifest file in the given directory
@@ -74,9 +71,6 @@ pub enum Commands {
         /// Maximum number of workers to use
         #[arg(short = 'x', long = "max-workers")]
         max_workers: Option<usize>,
-        /// Verbosity level
-        #[arg(short, long, action = clap::ArgAction::Count)]
-        verbosity: Option<u8>,
     },
 }
 
@@ -118,7 +112,6 @@ pub async fn cli() -> anyhow::Result<()> {
             mode,
             chunk_size,
             max_workers,
-            verbosity,
         }) => {
             generate::generate(generate::GenerateOptions {
                 dirpath,
@@ -130,7 +123,7 @@ pub async fn cli() -> anyhow::Result<()> {
                 max_workers,
                 debug: args.debug,
                 show_progress: !args.no_progress || args.debug,
-                verbosity: verbosity.unwrap_or(args.verbosity),
+                verbosity: args.verbosity,
             })
             .await?;
         }
@@ -139,7 +132,6 @@ pub async fn cli() -> anyhow::Result<()> {
             manifest,
             chunk_size,
             max_workers,
-            verbosity,
         }) => {
             verify::verify(verify::VerifyOptions {
                 dirpath,
@@ -148,7 +140,7 @@ pub async fn cli() -> anyhow::Result<()> {
                 max_workers: max_workers.unwrap_or(thread::available_parallelism()?.get()),
                 debug: args.debug,
                 show_progress: !args.no_progress || args.debug,
-                verbosity: verbosity.unwrap_or(args.verbosity),
+                verbosity: args.verbosity,
             })
             .await?;
         }

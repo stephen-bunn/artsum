@@ -111,17 +111,14 @@ enum DisplayMessage {
     Result(GenerateChecksumResult),
     Error(GenerateChecksumError),
     Progress(GenerateChecksumProgress),
-    Exit {
-        sync: tokio::sync::oneshot::Sender<()>,
-        progress: GenerateChecksumProgress,
-    },
+    Exit,
 }
 
-async fn run_display_worker(
-    mut display_rx: tokio::sync::mpsc::Receiver<DisplayMessage>,
+async fn display_worker(
+    mut rx: tokio::sync::mpsc::Receiver<DisplayMessage>,
 ) -> Result<(), anyhow::Error> {
     let mut progress_visible = false;
-    while let Some(msg) = display_rx.recv().await {
+    while let Some(msg) = rx.recv().await {
         if progress_visible {
             print!("\r\x1B[K");
             progress_visible = false;
@@ -144,10 +141,7 @@ async fn run_display_worker(
                 print!("{}", progress);
                 progress_visible = true;
             }
-            DisplayMessage::Exit { sync, progress } => {
-                print!("\r\x1B[K");
-                println!("{}", progress);
-                sync.send(()).unwrap();
+            DisplayMessage::Exit => {
                 break;
             }
         }
@@ -157,19 +151,140 @@ async fn run_display_worker(
     Ok(())
 }
 
+async fn progress_worker(
+    tx: tokio::sync::mpsc::Sender<DisplayMessage>,
+    counters: Arc<GenerateChecksumCounters>,
+) -> Result<(), anyhow::Error> {
+    let mut last_progress = 0;
+    let mut interval = tokio::time::interval(Duration::from_millis(10));
+
+    loop {
+        interval.tick().await;
+
+        let success = counters.success.load(Ordering::Relaxed);
+        let error = counters.error.load(Ordering::Relaxed);
+
+        if (success + error) != last_progress {
+            last_progress = success + error;
+            tx.send(DisplayMessage::Progress(GenerateChecksumProgress {
+                success,
+                error,
+            }))
+            .await?;
+        }
+    }
+}
+
+struct DisplayManager {
+    tx: tokio::sync::mpsc::Sender<DisplayMessage>,
+    counters: Arc<GenerateChecksumCounters>,
+    display_task: Option<tokio::task::JoinHandle<Result<(), anyhow::Error>>>,
+    progress_task: Option<tokio::task::JoinHandle<Result<(), anyhow::Error>>>,
+    verbosity: u8,
+    disabled: bool,
+}
+
+impl DisplayManager {
+    fn new(buffer_size: usize, verbosity: u8, disabled: bool) -> Self {
+        let (tx, rx) = tokio::sync::mpsc::channel(buffer_size);
+        let counters = Arc::new(GenerateChecksumCounters {
+            success: Arc::new(AtomicUsize::new(0)),
+            error: Arc::new(AtomicUsize::new(0)),
+        });
+
+        let mut display_task = None;
+        if !disabled {
+            display_task = Some(tokio::spawn(display_worker(rx)));
+        }
+
+        let manager = Self {
+            tx,
+            counters,
+            display_task,
+            progress_task: None,
+            verbosity,
+            disabled,
+        };
+
+        manager
+    }
+
+    async fn start_progress_worker(&mut self) -> anyhow::Result<()> {
+        if self.disabled {
+            warn!("Attempted to start progress worker when display manager is disabled");
+            return Ok(());
+        }
+
+        self.progress_task = Some(tokio::spawn(progress_worker(
+            self.tx.clone(),
+            self.counters.clone(),
+        )));
+        Ok(())
+    }
+
+    async fn stop_progress_worker(&mut self) {
+        if let Some(progress_task) = self.progress_task.take() {
+            progress_task.abort();
+        }
+    }
+
+    async fn report_start(
+        &self,
+        format: ManifestFormat,
+        filepath: PathBuf,
+    ) -> Result<(), anyhow::Error> {
+        if !self.disabled {
+            self.tx
+                .send(DisplayMessage::Start { format, filepath })
+                .await?
+        }
+        Ok(())
+    }
+
+    async fn report_checksum_result(
+        &self,
+        result: GenerateChecksumResult,
+    ) -> Result<(), anyhow::Error> {
+        self.counters.success.fetch_add(1, Ordering::Relaxed);
+        if !self.disabled && self.verbosity >= 1 {
+            self.tx.send(DisplayMessage::Result(result)).await?;
+        }
+        Ok(())
+    }
+
+    async fn report_error(&self, error: GenerateChecksumError) -> Result<(), anyhow::Error> {
+        self.counters.error.fetch_add(1, Ordering::Relaxed);
+        if !self.disabled {
+            self.tx.send(DisplayMessage::Error(error)).await?;
+        }
+        Ok(())
+    }
+
+    async fn report_exit(
+        &mut self,
+        sync_tx: tokio::sync::oneshot::Sender<()>,
+    ) -> Result<(), anyhow::Error> {
+        if !self.disabled {
+            self.tx.send(DisplayMessage::Exit).await?;
+        }
+
+        if let Some(display_task) = self.display_task.take() {
+            display_task.abort();
+        }
+
+        sync_tx.send(()).unwrap();
+        Ok(())
+    }
+}
+
 pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
     debug!("{:?}", options);
     if !options.dirpath.is_dir() {
         return Err(anyhow::anyhow!("Directory does not exist"));
     }
 
-    let display_buffer_size = options.max_workers * 4;
-    let (display_tx, display_rx) =
-        tokio::sync::mpsc::channel::<DisplayMessage>(display_buffer_size);
-    let using_display = !options.debug;
-    if using_display {
-        tokio::spawn(run_display_worker(display_rx));
-    }
+    let mut display_manager =
+        DisplayManager::new(options.max_workers * 4, options.verbosity, options.debug);
 
     let mut checksum_handles = Vec::new();
     let manifest_format = options.format.unwrap_or_default();
@@ -199,46 +314,12 @@ pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
         .output
         .unwrap_or(manifest_parser.build_manifest_filepath(Some(&options.dirpath)));
 
-    if using_display {
-        display_tx
-            .send(DisplayMessage::Start {
-                format: manifest_format,
-                filepath: manifest_filepath.clone(),
-            })
-            .await?;
-    }
+    display_manager
+        .report_start(manifest_format, manifest_filepath.clone())
+        .await?;
 
-    let counters = GenerateChecksumCounters {
-        success: Arc::new(AtomicUsize::new(0)),
-        error: Arc::new(AtomicUsize::new(0)),
-    };
-
-    let mut display_progress_task: Option<tokio::task::JoinHandle<()>> = None;
     if options.show_progress {
-        let progress_display_tx = display_tx.clone();
-        let progress_success_count = counters.success.clone();
-        let progress_error_count = counters.error.clone();
-        display_progress_task = Some(tokio::spawn(async move {
-            let mut last_progress = 0;
-            let mut interval = tokio::time::interval(Duration::from_millis(10));
-            loop {
-                interval.tick().await;
-                let success = progress_success_count.load(Ordering::Relaxed);
-                let error = progress_error_count.load(Ordering::Relaxed);
-                if (success + error) != last_progress {
-                    last_progress = success + error;
-                    if using_display {
-                        progress_display_tx
-                            .send(DisplayMessage::Progress(GenerateChecksumProgress {
-                                success,
-                                error,
-                            }))
-                            .await
-                            .unwrap()
-                    }
-                }
-            }
-        }));
+        display_manager.start_progress_worker().await?;
     }
 
     let worker_semaphore = Arc::new(tokio::sync::Semaphore::new(options.max_workers));
@@ -280,6 +361,7 @@ pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
                     progress_callback: None,
                 })
                 .await;
+
                 match checksum {
                     Ok(checksum) => {
                         let checksum_result = GenerateChecksumResult { checksum, filepath };
@@ -301,9 +383,6 @@ pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
         }
     }
 
-    let success_counter = counters.success.clone();
-    let error_counter = counters.error.clone();
-
     let mut artifacts = HashMap::<String, Checksum>::new();
     for handle in checksum_handles {
         let result = handle.await?;
@@ -313,35 +392,14 @@ pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
                 if let Some(relative_filepath) =
                     pathdiff::diff_paths(&result.filepath, options.dirpath.clone())
                 {
-                    success_counter.fetch_add(1, Ordering::Relaxed);
                     artifacts.insert(relative_filepath.to_string_lossy().to_string(), checksum);
-                    if options.verbosity >= 1 && using_display {
-                        display_tx
-                            .send(DisplayMessage::Result(GenerateChecksumResult {
-                                filepath: relative_filepath.to_string_lossy().to_string(),
-                                checksum: result.checksum,
-                            }))
-                            .await?;
-                    }
+                    display_manager.report_checksum_result(result).await?;
                 } else {
-                    error_counter.fetch_add(1, Ordering::Relaxed);
-
-                    if using_display {
-                        display_tx
-                            .send(DisplayMessage::Error(GenerateChecksumError {
-                                filepath: result.filepath,
-                                message: "Failed to calculate relative path".to_string(),
-                                error: None,
-                            }))
-                            .await?;
-                    }
+                    display_manager.report_checksum_result(result).await?;
                 }
             }
             Err(error) => {
-                error_counter.fetch_add(1, Ordering::Relaxed);
-                if using_display {
-                    display_tx.send(DisplayMessage::Error(error)).await?;
-                }
+                display_manager.report_error(error).await?;
             }
         }
     }
@@ -361,30 +419,10 @@ pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
     )
     .await?;
 
-    if using_display {
-        let (sync_tx, sync_rx) = tokio::sync::oneshot::channel::<()>();
-        display_tx
-            .send(DisplayMessage::Exit {
-                sync: sync_tx,
-                progress: GenerateChecksumProgress {
-                    success: counters.success.load(Ordering::Relaxed),
-                    error: counters.error.load(Ordering::Relaxed),
-                },
-            })
-            .await?;
-
-        if let Some(display_progress_task) = display_progress_task {
-            display_progress_task.abort();
-        }
-
-        if !options.debug {
-            sync_rx.await?;
-        }
-    } else {
-        if let Some(display_progress_task) = display_progress_task {
-            display_progress_task.abort();
-        }
-    }
+    let (sync_tx, sync_rx) = tokio::sync::oneshot::channel::<()>();
+    display_manager.report_exit(sync_tx).await?;
+    display_manager.stop_progress_worker().await;
+    sync_rx.await?;
 
     Ok(())
 }
