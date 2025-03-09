@@ -44,56 +44,40 @@ pub struct GenerateOptions {
     pub verbosity: u8,
 }
 
-#[derive(Debug)]
-struct GenerateChecksumResult {
-    filepath: String,
-    checksum: Checksum,
+type GenerateResult<T> = Result<T, GenerateError>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum GenerateError {
+    #[error("Checksum Error: {0}")]
+    ChecksumError(#[from] ChecksumError),
+
+    #[error("IO Error: {0}")]
+    IoError(#[from] std::io::Error),
+
+    #[error("Task Join Error: {0}")]
+    JoinError(#[from] tokio::task::JoinError),
+
+    #[error("Pattern Error: {0}")]
+    PatternError(#[from] glob::PatternError),
+
+    #[error("Manifest Error: {0}")]
+    ManifestError(#[from] crate::error::ManifestError),
+
+    #[error("Unknown Error: {0}")]
+    Unknown(#[from] anyhow::Error),
 }
 
-impl Display for GenerateChecksumResult {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            format!("{} {}", self.checksum, self.filepath).dimmed()
-        )
-    }
-}
-
-#[derive(Debug)]
-struct GenerateChecksumError {
-    filepath: String,
-    message: String,
-    error: Option<ChecksumError>,
-}
-
-impl Display for GenerateChecksumError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(
-            f,
-            "{}: {}{}",
-            self.filepath.dimmed(),
-            self.message.red(),
-            if let Some(error) = &self.error {
-                format!(" ({})", error).red()
-            } else {
-                "".into()
-            }
-        )
-    }
-}
-
-struct GenerateChecksumProgress {
+struct ChecksumTaskProgress {
     success: usize,
     error: usize,
 }
 
-struct GenerateChecksumCounters {
+struct ChecksumTaskCounters {
     success: Arc<AtomicUsize>,
     error: Arc<AtomicUsize>,
 }
 
-impl Display for GenerateChecksumProgress {
+impl Display for ChecksumTaskProgress {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}", format!("{} added", self.success).green())?;
         if self.error > 0 {
@@ -108,9 +92,9 @@ enum DisplayMessage {
         format: ManifestFormat,
         filepath: PathBuf,
     },
-    Result(GenerateChecksumResult),
-    Error(GenerateChecksumError),
-    Progress(GenerateChecksumProgress),
+    Result(ChecksumTaskResult),
+    Error(ChecksumTaskError),
+    Progress(ChecksumTaskProgress),
     Exit,
 }
 
@@ -153,7 +137,7 @@ async fn display_worker(
 
 async fn progress_worker(
     tx: tokio::sync::mpsc::Sender<DisplayMessage>,
-    counters: Arc<GenerateChecksumCounters>,
+    counters: Arc<ChecksumTaskCounters>,
 ) -> Result<(), anyhow::Error> {
     let mut last_progress = 0;
     let mut interval = tokio::time::interval(Duration::from_millis(10));
@@ -166,7 +150,7 @@ async fn progress_worker(
 
         if (success + error) != last_progress {
             last_progress = success + error;
-            tx.send(DisplayMessage::Progress(GenerateChecksumProgress {
+            tx.send(DisplayMessage::Progress(ChecksumTaskProgress {
                 success,
                 error,
             }))
@@ -177,7 +161,7 @@ async fn progress_worker(
 
 struct DisplayManager {
     tx: tokio::sync::mpsc::Sender<DisplayMessage>,
-    counters: Arc<GenerateChecksumCounters>,
+    counters: Arc<ChecksumTaskCounters>,
     display_task: Option<tokio::task::JoinHandle<Result<(), anyhow::Error>>>,
     progress_task: Option<tokio::task::JoinHandle<Result<(), anyhow::Error>>>,
     verbosity: u8,
@@ -187,7 +171,7 @@ struct DisplayManager {
 impl DisplayManager {
     fn new(buffer_size: usize, verbosity: u8, disabled: bool) -> Self {
         let (tx, rx) = tokio::sync::mpsc::channel(buffer_size);
-        let counters = Arc::new(GenerateChecksumCounters {
+        let counters = Arc::new(ChecksumTaskCounters {
             success: Arc::new(AtomicUsize::new(0)),
             error: Arc::new(AtomicUsize::new(0)),
         });
@@ -243,7 +227,7 @@ impl DisplayManager {
 
     async fn report_checksum_result(
         &self,
-        result: GenerateChecksumResult,
+        result: ChecksumTaskResult,
     ) -> Result<(), anyhow::Error> {
         self.counters.success.fetch_add(1, Ordering::Relaxed);
         if !self.disabled && self.verbosity >= 1 {
@@ -252,7 +236,7 @@ impl DisplayManager {
         Ok(())
     }
 
-    async fn report_error(&self, error: GenerateChecksumError) -> Result<(), anyhow::Error> {
+    async fn report_error(&self, error: ChecksumTaskError) -> Result<(), anyhow::Error> {
         self.counters.error.fetch_add(1, Ordering::Relaxed);
         if !self.disabled {
             self.tx.send(DisplayMessage::Error(error)).await?;
@@ -277,18 +261,128 @@ impl DisplayManager {
     }
 }
 
-pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
-    debug!("{:?}", options);
-    if !options.dirpath.is_dir() {
-        return Err(anyhow::anyhow!("Directory does not exist"));
+#[derive(Debug)]
+struct ChecksumTaskResult {
+    filepath: String,
+    checksum: Checksum,
+}
+
+impl Display for ChecksumTaskResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            format!("{} {}", self.checksum, self.filepath).dimmed()
+        )
+    }
+}
+
+#[derive(Debug)]
+struct ChecksumTaskError {
+    filepath: String,
+    message: String,
+    error: Option<ChecksumError>,
+}
+
+impl Display for ChecksumTaskError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}: {}{}",
+            self.filepath.dimmed(),
+            self.message.red(),
+            if let Some(error) = &self.error {
+                format!(" ({})", error).red()
+            } else {
+                "".into()
+            }
+        )
+    }
+}
+
+struct ChecksumTaskBuilder {
+    worker_semaphore: Arc<tokio::sync::Semaphore>,
+    checksum_algorithm: ChecksumAlgorithm,
+    checksum_mode: ChecksumMode,
+    chunk_size: usize,
+}
+
+impl ChecksumTaskBuilder {
+    fn new(
+        max_workers: usize,
+        algorithm: ChecksumAlgorithm,
+        mode: ChecksumMode,
+        chunk_size: usize,
+    ) -> Self {
+        Self {
+            worker_semaphore: Arc::new(tokio::sync::Semaphore::new(max_workers)),
+            checksum_algorithm: algorithm,
+            checksum_mode: mode,
+            chunk_size,
+        }
     }
 
-    let mut display_manager =
-        DisplayManager::new(options.max_workers * 4, options.verbosity, options.debug);
+    fn build_task(
+        &self,
+        filepath: PathBuf,
+    ) -> tokio::task::JoinHandle<Result<ChecksumTaskResult, ChecksumTaskError>> {
+        let worker_permit = self.worker_semaphore.clone();
+        let checksum_algorithm = self.checksum_algorithm.clone();
+        let checksum_mode = self.checksum_mode.clone();
+        let chunk_size = self.chunk_size;
 
-    let mut checksum_handles = Vec::new();
+        tokio::spawn(async move {
+            let _permit = worker_permit
+                .acquire()
+                .await
+                .expect("Failed to acquire worker permit");
+
+            let checksum = Checksum::from_file(ChecksumOptions {
+                filepath: filepath.clone(),
+                algorithm: checksum_algorithm.clone(),
+                mode: checksum_mode.clone(),
+                chunk_size: Some(chunk_size),
+                progress_callback: None,
+            })
+            .await;
+
+            match checksum {
+                Ok(checksum) => {
+                    let generation_result = ChecksumTaskResult {
+                        checksum,
+                        filepath: filepath.to_string_lossy().to_string(),
+                    };
+
+                    info!("{:?}", generation_result);
+                    Ok(generation_result)
+                }
+                Err(error) => {
+                    let generation_error = ChecksumTaskError {
+                        filepath: filepath.to_string_lossy().to_string(),
+                        message: "Failed to calculate checksum".to_string(),
+                        error: Some(error),
+                    };
+
+                    error!("{:?}", generation_error);
+                    Err(generation_error)
+                }
+            }
+        })
+    }
+}
+
+pub async fn generate(options: GenerateOptions) -> GenerateResult<()> {
+    debug!("{:?}", options);
+    if !options.dirpath.is_dir() {
+        return Err(anyhow::anyhow!("Directory does not exist: {:?}", options.dirpath).into());
+    }
+
     let manifest_format = options.format.unwrap_or_default();
     let manifest_parser: Box<dyn ManifestParser> = manifest_format.get_parser();
+    let manifest_filepath = options
+        .output
+        .unwrap_or(manifest_parser.build_manifest_filepath(Some(&options.dirpath)));
+
     let checksum_algorithm = manifest_parser.algorithm().unwrap_or(
         options
             .algorithm
@@ -309,11 +403,8 @@ pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
         }
     }
 
-    let checksum_mode = options.mode.unwrap_or(ChecksumMode::default());
-    let manifest_filepath = options
-        .output
-        .unwrap_or(manifest_parser.build_manifest_filepath(Some(&options.dirpath)));
-
+    let mut display_manager =
+        DisplayManager::new(options.max_workers * 4, options.verbosity, options.debug);
     display_manager
         .report_start(manifest_format, manifest_filepath.clone())
         .await?;
@@ -322,7 +413,15 @@ pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
         display_manager.start_progress_worker().await?;
     }
 
-    let worker_semaphore = Arc::new(tokio::sync::Semaphore::new(options.max_workers));
+    let mut checksum_tasks = Vec::new();
+    let checksum_task_builder = ChecksumTaskBuilder::new(
+        options.max_workers,
+        checksum_algorithm.clone(),
+        options.mode.unwrap_or(ChecksumMode::default()),
+        options.chunk_size,
+    );
+
+    // let worker_semaphore = Arc::new(tokio::sync::Semaphore::new(options.max_workers));
     for entry in glob::glob_with(
         format!("{}/**/*", options.dirpath.to_string_lossy()).as_str(),
         glob::MatchOptions {
@@ -340,51 +439,13 @@ pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
                 continue;
             }
 
-            let algorithm = checksum_algorithm.clone();
-            let worker_permit = worker_semaphore.clone();
-
-            let checksum_handle: tokio::task::JoinHandle<
-                Result<GenerateChecksumResult, GenerateChecksumError>,
-            > = tokio::spawn(async move {
-                // Acquire a worker permit to limit the number of concurrent checksum calculations
-                let _permit = worker_permit
-                    .acquire()
-                    .await
-                    .expect("Failed to acquire worker permit");
-
-                let filepath = path.to_string_lossy().to_string();
-                let checksum = Checksum::from_file(ChecksumOptions {
-                    filepath: path.clone(),
-                    algorithm: algorithm.clone(),
-                    mode: checksum_mode.clone(),
-                    chunk_size: Some(options.chunk_size),
-                    progress_callback: None,
-                })
-                .await;
-
-                match checksum {
-                    Ok(checksum) => {
-                        let checksum_result = GenerateChecksumResult { checksum, filepath };
-                        info!("{:?}", checksum_result);
-                        Ok(checksum_result)
-                    }
-                    Err(error) => {
-                        let checksum_error = GenerateChecksumError {
-                            filepath,
-                            message: "Failed to calculate checksum".to_string(),
-                            error: Some(error),
-                        };
-                        error!("{:?}", checksum_error);
-                        Err(checksum_error)
-                    }
-                }
-            });
-            checksum_handles.push(checksum_handle);
+            let checksum_task = checksum_task_builder.build_task(path.clone());
+            checksum_tasks.push(checksum_task);
         }
     }
 
     let mut artifacts = HashMap::<String, Checksum>::new();
-    for handle in checksum_handles {
+    for handle in checksum_tasks {
         let result = handle.await?;
         match result {
             Ok(result) => {
@@ -422,7 +483,7 @@ pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
     let (sync_tx, sync_rx) = tokio::sync::oneshot::channel::<()>();
     display_manager.report_exit(sync_tx).await?;
     display_manager.stop_progress_worker().await;
-    sync_rx.await?;
+    sync_rx.await.unwrap();
 
     Ok(())
 }
