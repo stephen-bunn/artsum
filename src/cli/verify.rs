@@ -20,6 +20,8 @@ use crate::{checksum::Checksum, manifest::ManifestSource};
 pub struct VerifyOptions {
     /// Path to the directory containing the files to verify
     pub dirpath: PathBuf,
+    /// Path to the manifest file to verify
+    pub manifest: Option<PathBuf>,
     /// Chunk size to use for generating checksums
     pub chunk_size: usize,
     /// Maximum number of workers to use
@@ -132,6 +134,9 @@ impl Display for VerifyChecksumProgress {
 
 /// Messages to display to the user
 enum DisplayMessage {
+    Start {
+        source: ManifestSource,
+    },
     Result(VerifyChecksumResult),
     Progress(VerifyChecksumProgress),
     Exit {
@@ -151,6 +156,9 @@ async fn run_display_worker(
             progress_visible = false;
         }
         match msg {
+            DisplayMessage::Start { source } => {
+                println!("Verifying {}", source.filepath.display());
+            }
             DisplayMessage::Result(result) => {
                 println!("{}", result);
             }
@@ -172,10 +180,6 @@ async fn run_display_worker(
 }
 
 /// Verifies checksums of files in a directory against a manifest file.
-///
-/// ## Errors
-///
-/// Returns an error if the directory does not exist or if no manifest file is found.
 pub async fn verify(options: VerifyOptions) -> Result<(), anyhow::Error> {
     if !options.dirpath.is_dir() {
         return Err(anyhow::anyhow!(
@@ -184,18 +188,27 @@ pub async fn verify(options: VerifyOptions) -> Result<(), anyhow::Error> {
         ));
     }
 
-    let manifest_source = ManifestSource::from_path(&options.dirpath);
-    if manifest_source.is_none() {
-        return Err(anyhow::anyhow!(
-            "No manifest found in {}",
-            options.dirpath.display()
-        ));
-    }
+    let manifest_source = if let Some(manifest_filepath) = options.manifest {
+        ManifestSource::from_path(&manifest_filepath).ok_or_else(|| {
+            anyhow::anyhow!("No manifest found at {}", manifest_filepath.display())
+        })?
+    } else {
+        ManifestSource::from_path(&options.dirpath)
+            .ok_or_else(|| anyhow::anyhow!("No manifest found in {}", options.dirpath.display()))?
+    };
 
-    let manifest_source = manifest_source.unwrap();
     let manifest_parser = manifest_source.get_parser();
     let manifest = manifest_parser
         .parse_manifest_source(&manifest_source)
+        .await?;
+
+    let (display_tx, display_rx) = tokio::sync::mpsc::channel::<DisplayMessage>(10000);
+    tokio::spawn(run_display_worker(display_rx));
+
+    display_tx
+        .send(DisplayMessage::Start {
+            source: manifest_source,
+        })
         .await?;
 
     let mut verify_handles: Vec<
@@ -214,9 +227,6 @@ pub async fn verify(options: VerifyOptions) -> Result<(), anyhow::Error> {
         invalid: Arc::new(AtomicUsize::new(0)),
         missing: Arc::new(AtomicUsize::new(0)),
     };
-
-    let (display_tx, display_rx) = tokio::sync::mpsc::channel::<DisplayMessage>(10000);
-    tokio::spawn(run_display_worker(display_rx));
 
     let valid_counter = counters.valid.clone();
     let invalid_counter = counters.invalid.clone();

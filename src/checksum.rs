@@ -222,7 +222,7 @@ where
     let chunk_size = chunk_size.unwrap_or(DEFAULT_CHUNK_SIZE);
     let mut current_chunk = Vec::with_capacity(chunk_size);
     while let Some(line) = lines.next_line().await? {
-        let normalized_line = line.replace('\r', "");
+        let normalized_line = line.replace("\r\n", "\n");
         let line_bytes = normalized_line.as_bytes();
 
         if current_chunk.len() + line_bytes.len() > chunk_size && !current_chunk.is_empty() {

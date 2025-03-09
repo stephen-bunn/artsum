@@ -54,9 +54,12 @@ pub enum Commands {
 
     /// Verify a manifest file in the given directory
     Verify {
-        /// Path to the directory containing the manifest file
+        /// Path to the directory containing the files to verify
         #[arg(value_parser = clap::value_parser!(PathBuf))]
         dirpath: PathBuf,
+        /// Path to the manifest file to verify
+        #[arg(short, long, value_parser = clap::value_parser!(PathBuf))]
+        manifest: Option<PathBuf>,
         /// Chunk size to use for generating checksums
         #[arg(short, long, default_value_t = DEFAULT_CHUNK_SIZE)]
         chunk_size: usize,
@@ -100,12 +103,14 @@ pub async fn cli() -> anyhow::Result<()> {
         }
         Some(Commands::Verify {
             dirpath,
+            manifest,
             chunk_size,
             max_workers,
             verbosity,
         }) => {
             verify::verify(verify::VerifyOptions {
                 dirpath,
+                manifest,
                 chunk_size,
                 max_workers,
                 verbosity: verbosity.unwrap_or(args.verbosity),
@@ -115,6 +120,7 @@ pub async fn cli() -> anyhow::Result<()> {
         None => {
             verify::verify(verify::VerifyOptions {
                 dirpath: current_dir().unwrap(),
+                manifest: None,
                 chunk_size: DEFAULT_CHUNK_SIZE,
                 max_workers: thread::available_parallelism()?.get(),
                 verbosity: args.verbosity,

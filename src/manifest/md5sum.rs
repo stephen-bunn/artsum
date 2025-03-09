@@ -55,7 +55,7 @@ impl ManifestParser for MD5SUMParser {
                 continue;
             }
 
-            let parts = line.split_whitespace().collect::<Vec<&str>>();
+            let parts = line.trim().split_whitespace().collect::<Vec<&str>>();
             if parts.len() != 2 {
                 continue;
             }

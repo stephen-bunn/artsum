@@ -98,7 +98,6 @@ impl Display for GenerateChecksumProgress {
 enum DisplayMessage {
     Start {
         format: ManifestFormat,
-        algorithm: ChecksumAlgorithm,
         filepath: PathBuf,
     },
     Result(GenerateChecksumResult),
@@ -121,21 +120,8 @@ async fn run_display_worker(
             progress_visible = false;
         }
         match msg {
-            DisplayMessage::Start {
-                format,
-                algorithm,
-                filepath,
-            } => {
-                println!(
-                    "{}",
-                    format!(
-                        "Generating {} ({}) to {}",
-                        format,
-                        algorithm,
-                        filepath.display()
-                    )
-                    .dimmed()
-                );
+            DisplayMessage::Start { format, filepath } => {
+                println!("Generating {} ({})", filepath.display(), format,);
             }
             DisplayMessage::Result(result) => {
                 println!("{}", result);
@@ -187,7 +173,6 @@ pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
     display_tx
         .send(DisplayMessage::Start {
             format: manifest_format,
-            algorithm: checksum_algorithm.clone(),
             filepath: manifest_filepath.clone(),
         })
         .await?;
