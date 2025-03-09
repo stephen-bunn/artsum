@@ -214,16 +214,18 @@ pub async fn verify(options: VerifyOptions) -> Result<(), anyhow::Error> {
         .parse_manifest_source(&manifest_source)
         .await?;
 
-    let (display_tx, display_rx) = tokio::sync::mpsc::channel::<DisplayMessage>(10000);
-    if !options.debug {
+    let display_buffer_size = options.max_workers * 4;
+    let (display_tx, display_rx) =
+        tokio::sync::mpsc::channel::<DisplayMessage>(display_buffer_size);
+    let using_display = !options.debug;
+    if using_display {
         tokio::spawn(run_display_worker(display_rx));
+        display_tx
+            .send(DisplayMessage::Start {
+                source: manifest_source,
+            })
+            .await?;
     }
-
-    display_tx
-        .send(DisplayMessage::Start {
-            source: manifest_source,
-        })
-        .await?;
 
     let mut verify_handles: Vec<
         tokio::task::JoinHandle<Result<VerifyChecksumResult, anyhow::Error>>,
@@ -253,15 +255,17 @@ pub async fn verify(options: VerifyOptions) -> Result<(), anyhow::Error> {
             let mut interval = tokio::time::interval(Duration::from_millis(10));
             loop {
                 interval.tick().await;
-                progress_display_tx
-                    .send(DisplayMessage::Progress(VerifyChecksumProgress {
-                        total: total_count,
-                        valid: valid_counter.load(Ordering::Relaxed),
-                        invalid: invalid_counter.load(Ordering::Relaxed),
-                        missing: missing_counter.load(Ordering::Relaxed),
-                    }))
-                    .await
-                    .unwrap();
+                if using_display {
+                    progress_display_tx
+                        .send(DisplayMessage::Progress(VerifyChecksumProgress {
+                            total: total_count,
+                            valid: valid_counter.load(Ordering::Relaxed),
+                            invalid: invalid_counter.load(Ordering::Relaxed),
+                            missing: missing_counter.load(Ordering::Relaxed),
+                        }))
+                        .await
+                        .unwrap();
+                }
             }
         }));
     }
@@ -331,32 +335,38 @@ pub async fn verify(options: VerifyOptions) -> Result<(), anyhow::Error> {
             VerifyChecksumStatus::Valid => options.verbosity >= 2,
         };
 
-        if should_display {
+        if using_display && should_display {
             result_display_tx
                 .send(DisplayMessage::Result(result))
                 .await?;
         }
     }
 
-    let (sync_tx, sync_rx) = tokio::sync::oneshot::channel::<()>();
-    display_tx
-        .send(DisplayMessage::Exit {
-            sync: sync_tx,
-            progress: VerifyChecksumProgress {
-                total: total_count,
-                valid: counters.valid.load(Ordering::Relaxed),
-                invalid: counters.invalid.load(Ordering::Relaxed),
-                missing: counters.missing.load(Ordering::Relaxed),
-            },
-        })
-        .await?;
+    if using_display {
+        let (sync_tx, sync_rx) = tokio::sync::oneshot::channel::<()>();
+        display_tx
+            .send(DisplayMessage::Exit {
+                sync: sync_tx,
+                progress: VerifyChecksumProgress {
+                    total: total_count,
+                    valid: counters.valid.load(Ordering::Relaxed),
+                    invalid: counters.invalid.load(Ordering::Relaxed),
+                    missing: counters.missing.load(Ordering::Relaxed),
+                },
+            })
+            .await?;
 
-    if let Some(display_progress_task) = display_progress_task {
-        display_progress_task.abort();
-    }
+        if let Some(display_progress_task) = display_progress_task {
+            display_progress_task.abort();
+        }
 
-    if !options.debug {
-        sync_rx.await?;
+        if !options.debug {
+            sync_rx.await?;
+        }
+    } else {
+        if let Some(display_progress_task) = display_progress_task {
+            display_progress_task.abort();
+        }
     }
 
     if counters.invalid.load(Ordering::Relaxed) > 0 {

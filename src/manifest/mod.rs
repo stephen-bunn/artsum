@@ -8,6 +8,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use log::{debug, info};
 use strum::IntoEnumIterator;
 
 use crate::{
@@ -77,16 +78,22 @@ impl ManifestSource {
     /// Create a `ManifestSource` from a given file path.
     pub fn from_path(path: &Path) -> Option<Self> {
         let resolved_path = path.canonicalize().ok()?;
+        debug!("Finding manifest source for path: {:?}", resolved_path);
         for format in ManifestFormat::iter() {
             let parser = format.get_parser();
 
             if resolved_path.is_file() && parser.can_handle_filepath(path) {
+                info!("Using manifest file for path: {:?}", resolved_path);
                 return Some(ManifestSource {
                     filepath: resolved_path,
                     format,
                 });
-            } else if resolved_path.is_dir() && parser.can_handle_dirpath(path) {
-                if let Some(manifest_file) = parser.find_manifest_filepath(path) {
+            } else if resolved_path.is_dir() && parser.can_handle_dirpath(&resolved_path) {
+                if let Some(manifest_file) = parser.find_manifest_filepath(&resolved_path) {
+                    info!(
+                        "Using manifest file found in directory: {:?}",
+                        manifest_file
+                    );
                     return Some(ManifestSource {
                         filepath: manifest_file.canonicalize().ok()?,
                         format,
@@ -128,6 +135,7 @@ pub trait ManifestParser {
         if let Ok(entries) = glob::glob(dirpath.join("*").to_str().unwrap()) {
             for entry in entries {
                 if let Ok(path) = entry {
+                    debug!("Checking if parser can handle file as manifest: {:?}", path);
                     if self.can_handle_filepath(&path) {
                         return Some(path);
                     }
@@ -146,6 +154,7 @@ pub trait ManifestParser {
 
         let default_filepath = dirpath.join(self.default_filename());
         if default_filepath.is_file() {
+            debug!("Found default manifest file: {:?}", default_filepath);
             return Some(default_filepath);
         }
 
