@@ -29,6 +29,8 @@ pub struct VerifyOptions {
     pub chunk_size: usize,
     /// Maximum number of workers to use
     pub max_workers: usize,
+    /// Show progress output
+    pub show_progress: bool,
     /// Verbosity level
     pub verbosity: u8,
 }
@@ -231,25 +233,29 @@ pub async fn verify(options: VerifyOptions) -> Result<(), anyhow::Error> {
         missing: Arc::new(AtomicUsize::new(0)),
     };
 
-    let valid_counter = counters.valid.clone();
-    let invalid_counter = counters.invalid.clone();
-    let missing_counter = counters.missing.clone();
-    let progress_display_tx = display_tx.clone();
-    let display_progress_task = tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_millis(10));
-        loop {
-            interval.tick().await;
-            progress_display_tx
-                .send(DisplayMessage::Progress(VerifyChecksumProgress {
-                    total: total_count,
-                    valid: valid_counter.load(Ordering::Relaxed),
-                    invalid: invalid_counter.load(Ordering::Relaxed),
-                    missing: missing_counter.load(Ordering::Relaxed),
-                }))
-                .await
-                .unwrap();
-        }
-    });
+    let mut display_progress_task: Option<tokio::task::JoinHandle<()>> = None;
+    if options.show_progress {
+        let valid_counter = counters.valid.clone();
+        let invalid_counter = counters.invalid.clone();
+        let missing_counter = counters.missing.clone();
+        let progress_display_tx = display_tx.clone();
+
+        display_progress_task = Some(tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(10));
+            loop {
+                interval.tick().await;
+                progress_display_tx
+                    .send(DisplayMessage::Progress(VerifyChecksumProgress {
+                        total: total_count,
+                        valid: valid_counter.load(Ordering::Relaxed),
+                        invalid: invalid_counter.load(Ordering::Relaxed),
+                        missing: missing_counter.load(Ordering::Relaxed),
+                    }))
+                    .await
+                    .unwrap();
+            }
+        }));
+    }
 
     let worker_semaphore = Arc::new(tokio::sync::Semaphore::new(options.max_workers));
     for (filename, checksum) in artifacts {
@@ -333,7 +339,10 @@ pub async fn verify(options: VerifyOptions) -> Result<(), anyhow::Error> {
         })
         .await?;
 
-    display_progress_task.abort();
+    if let Some(display_progress_task) = display_progress_task {
+        display_progress_task.abort();
+    }
+
     sync_rx.await?;
 
     if counters.invalid.load(Ordering::Relaxed) > 0 {

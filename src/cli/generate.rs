@@ -34,6 +34,8 @@ pub struct GenerateOptions {
     pub chunk_size: usize,
     /// Maximum number of worker threads to use for checksum calculation
     pub max_workers: usize,
+    /// Show progress output
+    pub show_progress: bool,
     /// Verbosity level for output
     pub verbosity: u8,
 }
@@ -106,7 +108,6 @@ enum DisplayMessage {
     Exit {
         sync: tokio::sync::oneshot::Sender<()>,
         progress: GenerateChecksumProgress,
-        filepath: PathBuf,
     },
 }
 
@@ -121,7 +122,11 @@ async fn run_display_worker(
         }
         match msg {
             DisplayMessage::Start { format, filepath } => {
-                println!("Generating {} ({})", filepath.display(), format,);
+                println!(
+                    "Generating {} ({})",
+                    filepath.canonicalize()?.display(),
+                    format,
+                );
             }
             DisplayMessage::Result(result) => {
                 println!("{}", result);
@@ -133,14 +138,9 @@ async fn run_display_worker(
                 print!("{}", progress);
                 progress_visible = true;
             }
-            DisplayMessage::Exit {
-                sync,
-                progress,
-                filepath,
-            } => {
+            DisplayMessage::Exit { sync, progress } => {
                 print!("\r\x1B[K");
                 println!("{}", progress);
-                println!("{}", filepath.display());
                 sync.send(()).unwrap();
                 break;
             }
@@ -182,28 +182,31 @@ pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
         error: Arc::new(AtomicUsize::new(0)),
     };
 
-    let progress_display_tx = display_tx.clone();
-    let progress_success_count = counters.success.clone();
-    let progress_error_count = counters.error.clone();
-    let display_progress_task = tokio::spawn(async move {
-        let mut last_progress = 0;
-        let mut interval = tokio::time::interval(Duration::from_millis(10));
-        loop {
-            interval.tick().await;
-            let success = progress_success_count.load(Ordering::Relaxed);
-            let error = progress_error_count.load(Ordering::Relaxed);
-            if (success + error) != last_progress {
-                last_progress = success + error;
-                progress_display_tx
-                    .send(DisplayMessage::Progress(GenerateChecksumProgress {
-                        success,
-                        error,
-                    }))
-                    .await
-                    .unwrap()
+    let mut display_progress_task: Option<tokio::task::JoinHandle<()>> = None;
+    if options.show_progress {
+        let progress_display_tx = display_tx.clone();
+        let progress_success_count = counters.success.clone();
+        let progress_error_count = counters.error.clone();
+        display_progress_task = Some(tokio::spawn(async move {
+            let mut last_progress = 0;
+            let mut interval = tokio::time::interval(Duration::from_millis(10));
+            loop {
+                interval.tick().await;
+                let success = progress_success_count.load(Ordering::Relaxed);
+                let error = progress_error_count.load(Ordering::Relaxed);
+                if (success + error) != last_progress {
+                    last_progress = success + error;
+                    progress_display_tx
+                        .send(DisplayMessage::Progress(GenerateChecksumProgress {
+                            success,
+                            error,
+                        }))
+                        .await
+                        .unwrap()
+                }
             }
-        }
-    });
+        }));
+    }
 
     let worker_semaphore = Arc::new(tokio::sync::Semaphore::new(options.max_workers));
     for entry in glob::glob_with(
@@ -316,11 +319,13 @@ pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
                 success: counters.success.load(Ordering::Relaxed),
                 error: counters.error.load(Ordering::Relaxed),
             },
-            filepath: manifest_filepath.clone(),
         })
         .await?;
 
-    display_progress_task.abort();
+    if let Some(display_progress_task) = display_progress_task {
+        display_progress_task.abort();
+    }
+
     sync_rx.await?;
 
     Ok(())

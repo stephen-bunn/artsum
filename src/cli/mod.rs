@@ -20,6 +20,9 @@ pub struct Cli {
     /// Disable color output
     #[arg(long, default_value_t = false)]
     pub no_color: bool,
+    /// Disable progress output
+    #[arg(long, default_value_t = false)]
+    pub no_progress: bool,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -97,6 +100,7 @@ pub async fn cli() -> anyhow::Result<()> {
                 mode,
                 chunk_size,
                 max_workers,
+                show_progress: !args.no_progress,
                 verbosity: verbosity.unwrap_or(args.verbosity),
             })
             .await?;
@@ -113,6 +117,7 @@ pub async fn cli() -> anyhow::Result<()> {
                 manifest,
                 chunk_size,
                 max_workers,
+                show_progress: !args.no_progress,
                 verbosity: verbosity.unwrap_or(args.verbosity),
             })
             .await?;
@@ -123,6 +128,7 @@ pub async fn cli() -> anyhow::Result<()> {
                 manifest: None,
                 chunk_size: DEFAULT_CHUNK_SIZE,
                 max_workers: thread::available_parallelism()?.get(),
+                show_progress: !args.no_progress,
                 verbosity: args.verbosity,
             })
             .await?
