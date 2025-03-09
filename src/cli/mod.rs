@@ -72,8 +72,8 @@ pub enum Commands {
         #[arg(short, long, default_value_t = DEFAULT_CHUNK_SIZE)]
         chunk_size: usize,
         /// Maximum number of workers to use
-        #[arg(short = 'x', long = "max-workers", default_value = "8")]
-        max_workers: usize,
+        #[arg(short = 'x', long = "max-workers")]
+        max_workers: Option<usize>,
         /// Verbosity level
         #[arg(short, long, action = clap::ArgAction::Count)]
         verbosity: Option<u8>,
@@ -145,7 +145,7 @@ pub async fn cli() -> anyhow::Result<()> {
                 dirpath,
                 manifest,
                 chunk_size,
-                max_workers,
+                max_workers: max_workers.unwrap_or(thread::available_parallelism()?.get()),
                 debug: args.debug,
                 show_progress: !args.no_progress || args.debug,
                 verbosity: verbosity.unwrap_or(args.verbosity),
