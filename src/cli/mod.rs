@@ -4,6 +4,8 @@ mod verify;
 use std::{env::current_dir, path::PathBuf, thread};
 
 use clap::Parser;
+use log::debug;
+use simplelog::ColorChoice;
 
 use crate::{
     checksum::{ChecksumAlgorithm, ChecksumMode, DEFAULT_CHUNK_SIZE},
@@ -17,6 +19,9 @@ pub struct Cli {
     #[arg(short, long, action = clap::ArgAction::Count, default_value_t = 0)]
     /// Verbosity level
     pub verbosity: u8,
+    /// Enable debug output
+    #[arg(long, default_value_t = false)]
+    pub debug: bool,
     /// Disable color output
     #[arg(long, default_value_t = false)]
     pub no_color: bool,
@@ -77,10 +82,33 @@ pub enum Commands {
 
 pub async fn cli() -> anyhow::Result<()> {
     let args = Cli::parse();
+
+    if args.debug {
+        simplelog::CombinedLogger::init(vec![
+            simplelog::TermLogger::new(
+                simplelog::LevelFilter::Debug,
+                simplelog::Config::default(),
+                simplelog::TerminalMode::Mixed,
+                if args.no_color {
+                    ColorChoice::Never
+                } else {
+                    ColorChoice::Auto
+                },
+            ),
+            simplelog::WriteLogger::new(
+                simplelog::LevelFilter::Debug,
+                simplelog::Config::default(),
+                std::fs::File::create(format!("{}_sfv.log", chrono::Local::now().format("%FT%T")))?,
+            ),
+        ])
+        .unwrap();
+    }
+
     if args.no_color {
         colored::control::set_override(false);
     }
 
+    debug!("{:?}", args);
     match args.command {
         Some(Commands::Generate {
             dirpath,
@@ -100,7 +128,8 @@ pub async fn cli() -> anyhow::Result<()> {
                 mode,
                 chunk_size,
                 max_workers,
-                show_progress: !args.no_progress,
+                debug: args.debug,
+                show_progress: !args.no_progress || args.debug,
                 verbosity: verbosity.unwrap_or(args.verbosity),
             })
             .await?;
@@ -117,7 +146,8 @@ pub async fn cli() -> anyhow::Result<()> {
                 manifest,
                 chunk_size,
                 max_workers,
-                show_progress: !args.no_progress,
+                debug: args.debug,
+                show_progress: !args.no_progress || args.debug,
                 verbosity: verbosity.unwrap_or(args.verbosity),
             })
             .await?;
@@ -128,7 +158,8 @@ pub async fn cli() -> anyhow::Result<()> {
                 manifest: None,
                 chunk_size: DEFAULT_CHUNK_SIZE,
                 max_workers: thread::available_parallelism()?.get(),
-                show_progress: !args.no_progress,
+                debug: args.debug,
+                show_progress: !args.no_progress || args.debug,
                 verbosity: args.verbosity,
             })
             .await?

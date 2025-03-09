@@ -10,6 +10,7 @@ use std::{
     str::FromStr,
 };
 
+use log::debug;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 
 use crate::error::ChecksumError;
@@ -248,6 +249,7 @@ impl Checksum {
 
 /// Calculates the checksum of a file using the specified algorithm.
 pub async fn checksum_file(options: ChecksumOptions) -> Result<Vec<u8>, Error> {
+    debug!("{:?}", options);
     match options.algorithm {
         ChecksumAlgorithm::MD5 => md5::calculate_md5(options).await,
         ChecksumAlgorithm::SHA1 => sha::calculate_sha1(options).await,

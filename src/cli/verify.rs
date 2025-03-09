@@ -13,12 +13,14 @@ use std::{
 };
 
 use colored::Colorize;
+use log::{debug, info};
 
 use crate::{
     checksum::{Checksum, ChecksumOptions},
     manifest::ManifestSource,
 };
 
+#[derive(Debug)]
 /// Options for the verify command
 pub struct VerifyOptions {
     /// Path to the directory containing the files to verify
@@ -29,12 +31,15 @@ pub struct VerifyOptions {
     pub chunk_size: usize,
     /// Maximum number of workers to use
     pub max_workers: usize,
+    /// Debug output enabled
+    pub debug: bool,
     /// Show progress output
     pub show_progress: bool,
     /// Verbosity level
     pub verbosity: u8,
 }
 
+#[derive(Debug)]
 /// Represents the status of a checksum verification
 pub enum VerifyChecksumStatus {
     Valid,
@@ -52,6 +57,7 @@ impl VerifyChecksumStatus {
     }
 }
 
+#[derive(Debug)]
 /// Represents the result of a checksum verification
 pub struct VerifyChecksumResult {
     pub status: VerifyChecksumStatus,
@@ -186,6 +192,7 @@ async fn run_display_worker(
 
 /// Verifies checksums of files in a directory against a manifest file.
 pub async fn verify(options: VerifyOptions) -> Result<(), anyhow::Error> {
+    debug!("{:?}", options);
     if !options.dirpath.is_dir() {
         return Err(anyhow::anyhow!(
             "{} is not a directory",
@@ -208,7 +215,9 @@ pub async fn verify(options: VerifyOptions) -> Result<(), anyhow::Error> {
         .await?;
 
     let (display_tx, display_rx) = tokio::sync::mpsc::channel::<DisplayMessage>(10000);
-    tokio::spawn(run_display_worker(display_rx));
+    if !options.debug {
+        tokio::spawn(run_display_worker(display_rx));
+    }
 
     display_tx
         .send(DisplayMessage::Start {
@@ -299,12 +308,15 @@ pub async fn verify(options: VerifyOptions) -> Result<(), anyhow::Error> {
                 VerifyChecksumStatus::Invalid
             };
 
-            Ok(VerifyChecksumResult {
+            let checksum_result = VerifyChecksumResult {
                 status,
                 actual: Some(actual),
                 expected,
                 filename,
-            })
+            };
+
+            info!("{:?}", checksum_result);
+            Ok(checksum_result)
         });
 
         verify_handles.push(verify_handle);
@@ -343,7 +355,9 @@ pub async fn verify(options: VerifyOptions) -> Result<(), anyhow::Error> {
         display_progress_task.abort();
     }
 
-    sync_rx.await?;
+    if !options.debug {
+        sync_rx.await?;
+    }
 
     if counters.invalid.load(Ordering::Relaxed) > 0 {
         std::process::exit(1);

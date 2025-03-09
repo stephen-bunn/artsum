@@ -11,6 +11,7 @@ use std::{
 };
 
 use colored::Colorize;
+use log::debug;
 
 use crate::{
     checksum::{Checksum, ChecksumAlgorithm, ChecksumMode, ChecksumOptions},
@@ -18,6 +19,7 @@ use crate::{
     manifest::{Manifest, ManifestFormat, ManifestParser},
 };
 
+#[derive(Debug)]
 /// Options for generating checksums
 pub struct GenerateOptions {
     /// Path to the directory to generate checksums for
@@ -34,6 +36,8 @@ pub struct GenerateOptions {
     pub chunk_size: usize,
     /// Maximum number of worker threads to use for checksum calculation
     pub max_workers: usize,
+    /// Debug output is enabled
+    pub debug: bool,
     /// Show progress output
     pub show_progress: bool,
     /// Verbosity level for output
@@ -152,12 +156,15 @@ async fn run_display_worker(
 }
 
 pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
+    debug!("{:?}", options);
     if !options.dirpath.is_dir() {
         return Err(anyhow::anyhow!("Directory does not exist"));
     }
 
     let (display_tx, display_rx) = tokio::sync::mpsc::channel::<DisplayMessage>(100);
-    tokio::spawn(run_display_worker(display_rx));
+    if !options.debug {
+        tokio::spawn(run_display_worker(display_rx));
+    }
 
     let mut checksum_handles = Vec::new();
     let manifest_format = options.format.unwrap_or_default();
@@ -326,7 +333,9 @@ pub async fn generate(options: GenerateOptions) -> Result<(), anyhow::Error> {
         display_progress_task.abort();
     }
 
-    sync_rx.await?;
+    if !options.debug {
+        sync_rx.await?;
+    }
 
     Ok(())
 }
