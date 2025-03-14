@@ -3,11 +3,8 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use regex::Regex;
 
-use super::{Manifest, ManifestParser, ManifestSource};
-use crate::{
-    checksum::{Checksum, ChecksumAlgorithm, ChecksumMode},
-    error::ManifestError,
-};
+use super::{Manifest, ManifestError, ManifestParser, ManifestSource};
+use crate::checksum::{Checksum, ChecksumAlgorithm, ChecksumMode};
 
 pub const DEFAULT_MANIFEST_FILENAME: &str = "sfv.md5";
 

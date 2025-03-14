@@ -1,6 +1,7 @@
 //! Verify command implementation for SFV.
 //!
 //! This module handles verifying checksums of files in a directory against a manifest file.
+
 use std::{
     fmt::Display,
     io::Write,

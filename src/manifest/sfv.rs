@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use regex::Regex;
 use toml;
 
-use super::{Manifest, ManifestParser, ManifestSource};
-use crate::{checksum::ChecksumAlgorithm, error::ManifestError};
+use super::{Manifest, ManifestError, ManifestParser, ManifestSource};
+use crate::checksum::ChecksumAlgorithm;
 
 pub const DEFAULT_MANIFEST_FILENAME: &str = "sfv.toml";
 
@@ -42,10 +42,10 @@ impl ManifestParser for SFVParser {
     }
 
     async fn from_str(&self, data: &str) -> Result<Manifest, ManifestError> {
-        toml::from_str(data).map_err(|e| ManifestError::DeserializeError(e))
+        toml::from_str(data).map_err(|e| ManifestError::DeserializationFailed(e))
     }
 
     async fn to_string(&self, manifest: &Manifest) -> Result<String, ManifestError> {
-        toml::to_string(manifest).map_err(|e| ManifestError::SerializeError(e))
+        toml::to_string(manifest).map_err(|e| ManifestError::SerializationFailed(e))
     }
 }

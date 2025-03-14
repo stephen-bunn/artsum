@@ -1,6 +1,5 @@
 mod checksum;
 mod cli;
-mod error;
 mod manifest;
 
 use colored::Colorize;

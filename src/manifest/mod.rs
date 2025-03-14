@@ -11,10 +11,32 @@ use async_trait::async_trait;
 use log::{debug, info};
 use strum::IntoEnumIterator;
 
-use crate::{
-    checksum::{Checksum, ChecksumAlgorithm},
-    error::ManifestError,
-};
+use crate::checksum::{Checksum, ChecksumAlgorithm};
+
+/// Known errors for manifest operations.
+#[derive(Debug, thiserror::Error)]
+pub enum ManifestError {
+    /// Represents errors that occur during IO operations
+    #[error("IO Error: {0}")]
+    IoError(#[from] std::io::Error),
+
+    /// Wraps a [`ChecksumError`] that occurred during manifest operations
+    #[error("Checksum Error: {0}")]
+    ChecksumError(#[from] crate::checksum::ChecksumError),
+
+    /// Occurs when the manifest cannot be properly deserialized from TOML format
+    #[error("Deserialization Error: {0}")]
+    DeserializationFailed(#[from] toml::de::Error),
+
+    /// Occurs when the manifest cannot be properly serialized to TOML format
+    #[error("Serialization Error: {0}")]
+    SerializationFailed(#[from] toml::ser::Error),
+
+    /// Occurs when an unsupported manifest format is encountered
+    #[error("Unsupported manifest format")]
+    #[allow(dead_code)]
+    UnsupportedFormat,
+}
 
 /// The format of a manifest file.
 #[derive(
@@ -42,7 +64,7 @@ impl Default for ManifestFormat {
 
 impl ManifestFormat {
     /// Get the parser for the manifest format.
-    pub fn get_parser(&self) -> Box<dyn ManifestParser> {
+    pub fn parser(&self) -> Box<dyn ManifestParser> {
         match self {
             ManifestFormat::SFV => Box::new(sfv::SFVParser::default()),
             ManifestFormat::MD5SUM => Box::new(md5sum::MD5SUMParser::default()),
@@ -71,8 +93,8 @@ pub struct ManifestSource {
 
 impl ManifestSource {
     /// Get the parser for the manifest source.
-    pub fn get_parser(&self) -> Box<dyn ManifestParser> {
-        self.format.get_parser()
+    pub fn parser(&self) -> Box<dyn ManifestParser> {
+        self.format.parser()
     }
 
     /// Create a `ManifestSource` from a given file path.
@@ -80,7 +102,7 @@ impl ManifestSource {
         let resolved_path = path.canonicalize().ok()?;
         debug!("Finding manifest source for path: {:?}", resolved_path);
         for format in ManifestFormat::iter() {
-            let parser = format.get_parser();
+            let parser = format.parser();
 
             if resolved_path.is_file() && parser.can_handle_filepath(path) {
                 info!("Using manifest file for path: {:?}", resolved_path);

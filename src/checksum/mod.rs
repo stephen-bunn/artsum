@@ -13,13 +13,31 @@ use std::{
 use log::debug;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 
-use crate::error::ChecksumError;
-
 /// The delimiter used to separate the checksum algorithm and the digest.
 const CHECKSUM_DELIMITER: &str = ";";
 
 /// The default chunk size used to read files.
 pub const DEFAULT_CHUNK_SIZE: usize = 8192;
+
+/// Known errors for checksum operations.
+#[derive(Debug, thiserror::Error)]
+pub enum ChecksumError {
+    /// Represents errors that occur during IO operations
+    #[error("IO Error: {0}")]
+    IoError(#[from] std::io::Error),
+
+    /// Occurs when a checksum string does not follow the expected format
+    #[error("Invalid checksum string format, expected '<algorithm>;<digest>' or '<mode>;<algorithm>;<digest>'")]
+    InvalidChecksumFormat,
+
+    /// Occurs when attempting to use a checksum algorithm that is not supported
+    #[error("Unsupported checksum algorithm {0}")]
+    UnsupportedAlgorithm(String),
+
+    #[error("Unsupported checksum mode {0}")]
+    #[allow(dead_code)]
+    UnsupportedMode(String),
+}
 
 #[derive(Debug)]
 pub struct ChecksumOptions {
