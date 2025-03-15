@@ -119,7 +119,7 @@ pub async fn generate(options: GenerateOptions) -> GenerateResult<()> {
             format: manifest_format,
         })
         .await?;
-    if options.show_progress {
+    if options.show_progress && !options.debug {
         display_manager.start_progress_worker().await?;
     }
 

@@ -86,7 +86,7 @@ pub async fn verify(options: VerifyOptions) -> VerifyResult<()> {
     );
 
     display_manager.report_start(manifest_source).await?;
-    if options.show_progress {
+    if options.show_progress && !options.debug {
         display_manager.start_progress_worker().await?;
     }
 
