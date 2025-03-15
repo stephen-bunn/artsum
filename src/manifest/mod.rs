@@ -1,3 +1,4 @@
+pub mod b2sum;
 pub mod md5sum;
 pub mod sfv;
 pub mod sha1sum;
@@ -55,6 +56,7 @@ pub enum ManifestFormat {
     SHA1SUM,
     SHA256SUM,
     SHA512SUM,
+    B2SUM,
 }
 
 impl Default for ManifestFormat {
@@ -72,6 +74,7 @@ impl ManifestFormat {
             ManifestFormat::SHA1SUM => Box::new(sha1sum::SHA1SUMParser::default()),
             ManifestFormat::SHA256SUM => Box::new(sha256sum::SHA256SUMParser::default()),
             ManifestFormat::SHA512SUM => Box::new(sha512sum::SHA512SUMParser::default()),
+            ManifestFormat::B2SUM => Box::new(b2sum::B2SUMParser::default()),
         }
     }
 }

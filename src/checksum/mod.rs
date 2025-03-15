@@ -1,3 +1,4 @@
+mod blake;
 mod crc32;
 mod md5;
 mod sha;
@@ -117,6 +118,8 @@ pub enum ChecksumAlgorithm {
     XXH3,
     XXH32,
     XXH64,
+    BLAKE2B256,
+    BLAKE2B512,
 }
 
 impl Default for ChecksumAlgorithm {
@@ -280,6 +283,8 @@ pub async fn checksum_file(options: &ChecksumOptions) -> Result<Vec<u8>, Error> 
         ChecksumAlgorithm::XXH3 => xxhash::calculate_xxh3(options).await,
         ChecksumAlgorithm::XXH32 => xxhash::calculate_xxh32(options).await,
         ChecksumAlgorithm::XXH64 => xxhash::calculate_xxh64(options).await,
+        ChecksumAlgorithm::BLAKE2B256 => blake::calculate_blake2b256(options).await,
+        ChecksumAlgorithm::BLAKE2B512 => blake::calculate_blake2b512(options).await,
     }
 }
 
