@@ -31,11 +31,6 @@ pub enum ManifestError {
     /// Occurs when the manifest cannot be properly serialized to TOML format
     #[error("Serialization Error: {0}")]
     SerializationFailed(#[from] toml::ser::Error),
-
-    /// Occurs when an unsupported manifest format is encountered
-    #[error("Unsupported manifest format")]
-    #[allow(dead_code)]
-    UnsupportedFormat,
 }
 
 /// The format of a manifest file.

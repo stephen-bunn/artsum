@@ -1,11 +1,11 @@
-use std::{path::PathBuf, sync::atomic::Ordering};
+use std::{cmp::max, path::PathBuf, sync::atomic::Ordering};
 
 use display::DisplayManager;
 use log::debug;
 use task::VerifyTaskBuilder;
 
 use crate::{
-    checksum::{Checksum, ChecksumError},
+    checksum::ChecksumError,
     manifest::{ManifestError, ManifestSource},
 };
 
@@ -75,12 +75,16 @@ pub async fn verify(options: VerifyOptions) -> VerifyResult<()> {
         .parse_manifest_source(&manifest_source)
         .await?;
 
-    let mut verify_tasks = Vec::new();
+    let mut verify_tasks = Vec::with_capacity(manifest.artifacts.len());
     let verify_task_builder = VerifyTaskBuilder::new(options.max_workers, options.chunk_size);
 
+    let display_manager_buffer_size = max(
+        1024,
+        options.max_workers * 8 + (options.max_workers.saturating_sub(4) * 4),
+    );
     let mut display_manager = DisplayManager::new(
-        options.max_workers * 4,
-        verify_task_builder.counters.clone(),
+        display_manager_buffer_size,
+        &verify_task_builder.counters,
         options.verbosity,
         options.debug,
     );
@@ -90,15 +94,10 @@ pub async fn verify(options: VerifyOptions) -> VerifyResult<()> {
         display_manager.start_progress_worker().await?;
     }
 
-    let artifacts: Vec<(String, Checksum)> = manifest
-        .artifacts
-        .iter()
-        .map(|(filename, checksum)| (filename.clone(), checksum.clone()))
-        .collect();
-
-    for (filename, expected) in artifacts {
+    let dirpath = options.dirpath.clone();
+    for (filename, expected) in &manifest.artifacts {
         let verify_task =
-            verify_task_builder.build_task(options.dirpath.clone(), filename, expected);
+            verify_task_builder.verify_checksum(dirpath.clone(), &filename, &expected);
         verify_tasks.push(verify_task);
     }
 

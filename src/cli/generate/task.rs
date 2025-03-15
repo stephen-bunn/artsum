@@ -85,15 +85,18 @@ impl GenerateTaskBuilder {
         }
     }
 
-    pub fn build_task(
+    pub fn generate_checksum(
         &self,
-        filepath: PathBuf,
+        filepath: &PathBuf,
     ) -> tokio::task::JoinHandle<Result<GenerateTaskResult, GenerateTaskError>> {
         let worker_permit = self.worker_semaphore.clone();
-        let checksum_algorithm = self.checksum_algorithm.clone();
-        let checksum_mode = self.checksum_mode.clone();
+        let checksum_algorithm = self.checksum_algorithm;
+        let checksum_mode = self.checksum_mode;
         let chunk_size = self.chunk_size;
         let counters = self.counters.clone();
+
+        let filepath = filepath.clone();
+        let filepath_string = String::from(filepath.to_string_lossy());
 
         tokio::spawn(async move {
             let _permit = worker_permit
@@ -102,7 +105,7 @@ impl GenerateTaskBuilder {
                 .expect("Failed to acquire worker permit");
 
             let checksum = Checksum::from_file(ChecksumOptions {
-                filepath: filepath.clone(),
+                filepath,
                 algorithm: checksum_algorithm.clone(),
                 mode: checksum_mode.clone(),
                 chunk_size: Some(chunk_size),
@@ -114,7 +117,7 @@ impl GenerateTaskBuilder {
                 Ok(checksum) => {
                     let generation_result = GenerateTaskResult {
                         checksum,
-                        filepath: filepath.to_string_lossy().to_string(),
+                        filepath: filepath_string,
                     };
 
                     info!("{:?}", generation_result);
@@ -123,8 +126,8 @@ impl GenerateTaskBuilder {
                 }
                 Err(error) => {
                     let generation_error = GenerateTaskError {
-                        filepath: filepath.to_string_lossy().to_string(),
-                        message: "Failed to calculate checksum".to_string(),
+                        filepath: filepath_string,
+                        message: String::from("Failed to calculate checksum"),
                         error: Some(error),
                     };
 

@@ -1,15 +1,15 @@
 mod display;
 mod task;
 
-use std::{collections::HashMap, path::PathBuf};
+use std::{borrow::Cow, cmp::max, collections::HashMap, path::PathBuf};
 
 use display::DisplayManager;
 use log::{debug, info};
 use task::GenerateTaskBuilder;
 
 use crate::{
-    checksum::{Checksum, ChecksumAlgorithm, ChecksumError, ChecksumMode},
-    manifest::{Manifest, ManifestFormat},
+    checksum::{ChecksumAlgorithm, ChecksumError, ChecksumMode},
+    manifest::{Manifest, ManifestFormat, ManifestSource},
 };
 
 #[derive(Debug)]
@@ -72,12 +72,9 @@ pub async fn generate(options: GenerateOptions) -> GenerateResult<()> {
         .output
         .unwrap_or(manifest_parser.build_manifest_filepath(Some(&options.dirpath)));
 
-    let checksum_algorithm = manifest_parser.algorithm().unwrap_or(
-        options
-            .algorithm
-            .clone()
-            .unwrap_or(ChecksumAlgorithm::default()),
-    );
+    let checksum_algorithm = manifest_parser
+        .algorithm()
+        .unwrap_or_else(|| options.algorithm.unwrap_or_default());
 
     if let Some(algorithm) = options.algorithm {
         if algorithm != checksum_algorithm {
@@ -98,23 +95,30 @@ pub async fn generate(options: GenerateOptions) -> GenerateResult<()> {
         options.chunk_size,
     );
 
+    let display_manager_buffer_size = max(
+        1024,
+        options.max_workers * 8 + (options.max_workers.saturating_sub(4) * 4),
+    );
     let mut display_manager = DisplayManager::new(
-        options.max_workers * 4,
-        generate_task_builder.counters.clone(),
+        display_manager_buffer_size,
+        &generate_task_builder.counters,
         options.verbosity,
         options.debug,
     );
 
     display_manager
-        .report_start(manifest_format, manifest_filepath.clone())
+        .report_start(ManifestSource {
+            filepath: manifest_filepath.clone(),
+            format: manifest_format,
+        })
         .await?;
-
     if options.show_progress {
         display_manager.start_progress_worker().await?;
     }
 
+    let glob_pattern = options.dirpath.join("**/*");
     for entry in glob::glob_with(
-        format!("{}/**/*", options.dirpath.to_string_lossy()).as_str(),
+        glob_pattern.to_str().unwrap_or("**/*"),
         glob::MatchOptions {
             case_sensitive: false,
             require_literal_separator: false,
@@ -125,18 +129,18 @@ pub async fn generate(options: GenerateOptions) -> GenerateResult<()> {
             if !path.exists()
                 || path.is_dir()
                 || path.is_symlink()
-                || manifest_filepath.ends_with(path.clone())
+                || options.dirpath.join(&path) == manifest_filepath
             {
                 debug!("Skipping path {:?}", path);
                 continue;
             }
 
-            let checksum_task = generate_task_builder.build_task(path.clone());
-            generate_tasks.push(checksum_task);
+            let generate_task = generate_task_builder.generate_checksum(&path);
+            generate_tasks.push(generate_task);
         }
     }
 
-    let mut artifacts = HashMap::<String, Checksum>::new();
+    let mut artifacts = HashMap::with_capacity(generate_tasks.len());
     for task in generate_tasks {
         let task_result = task.await?;
         match task_result {
@@ -145,7 +149,10 @@ pub async fn generate(options: GenerateOptions) -> GenerateResult<()> {
                 if let Some(relative_filepath) =
                     pathdiff::diff_paths(&result.filepath, &options.dirpath)
                 {
-                    artifacts.insert(relative_filepath.to_string_lossy().to_string(), checksum);
+                    artifacts.insert(
+                        Cow::from(relative_filepath.to_string_lossy()).into_owned(),
+                        checksum,
+                    );
                     display_manager.report_task_result(result).await?;
                 }
             }
@@ -155,10 +162,7 @@ pub async fn generate(options: GenerateOptions) -> GenerateResult<()> {
         }
     }
 
-    info!(
-        "Writing manifest to {:?}",
-        manifest_filepath.canonicalize()?
-    );
+    info!("Writing manifest to {:?}", manifest_filepath);
     tokio::fs::write(
         &manifest_filepath,
         manifest_parser
@@ -170,6 +174,7 @@ pub async fn generate(options: GenerateOptions) -> GenerateResult<()> {
     )
     .await?;
 
+    display_manager.report_progress(true).await?;
     let (sync_tx, sync_rx) = tokio::sync::oneshot::channel::<()>();
     display_manager.report_exit(sync_tx).await?;
     display_manager.stop_progress_worker().await;

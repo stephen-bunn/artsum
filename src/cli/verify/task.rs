@@ -103,17 +103,19 @@ impl VerifyTaskBuilder {
         }
     }
 
-    pub fn build_task(
+    pub fn verify_checksum(
         &self,
         base_dirpath: PathBuf,
-        filename: String,
-        expected: Checksum,
+        filename: &str,
+        expected: &Checksum,
     ) -> tokio::task::JoinHandle<Result<VerifyTaskResult, VerifyError>> {
         let worker_permit = self.worker_sempahore.clone();
         let chunk_size = self.chunk_size;
         let counters = self.counters.clone();
-        let filepath = base_dirpath.join(filename.clone());
+        let filepath = base_dirpath.join(filename);
 
+        let filename = String::from(filename);
+        let expected = expected.clone();
         tokio::spawn(async move {
             let _permit = worker_permit
                 .acquire()

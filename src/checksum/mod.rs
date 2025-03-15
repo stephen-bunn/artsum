@@ -59,12 +59,12 @@ pub struct ChecksumOptions {
 }
 
 impl ChecksumOptions {
-    pub fn to_processing_options<F>(&self, process_chunk: F) -> ChecksumProcessingOptions<F>
+    pub fn to_processing_options<F>(&self, process_chunk: F) -> ChecksumProcessingOptions<'_, F>
     where
         F: FnMut(&[u8]),
     {
         ChecksumProcessingOptions {
-            filepath: self.filepath.clone(),
+            filepath: &self.filepath,
             mode: self.mode,
             chunk_size: self.chunk_size,
             process_chunk,
@@ -73,12 +73,12 @@ impl ChecksumOptions {
     }
 }
 
-pub struct ChecksumProcessingOptions<F>
+pub struct ChecksumProcessingOptions<'a, F>
 where
     F: FnMut(&[u8]),
 {
     /// The path to the file to process.
-    pub filepath: PathBuf,
+    pub filepath: &'a PathBuf,
 
     /// The checksum mode to use.
     pub mode: ChecksumMode,
@@ -96,8 +96,9 @@ where
 
 /// Defines the checksum algorithms supported by this library.
 #[derive(
-    Clone,
     Debug,
+    Clone,
+    Copy,
     Hash,
     PartialEq,
     Eq,
@@ -127,8 +128,10 @@ impl Default for ChecksumAlgorithm {
 
 impl ChecksumAlgorithm {
     /// Calculates the checksum of a file using the current algorithm.
-    pub async fn checksum_file(&self, options: ChecksumOptions) -> Result<Vec<u8>, ChecksumError> {
-        checksum_file(options).await.map_err(ChecksumError::IoError)
+    pub async fn checksum_file(&self, options: &ChecksumOptions) -> Result<Vec<u8>, ChecksumError> {
+        checksum_file(&options)
+            .await
+            .map_err(ChecksumError::IoError)
     }
 }
 
@@ -243,20 +246,20 @@ impl Checksum {
 
     /// Calculates the checksum of a file using the specified algorithm.
     pub async fn from_file(options: ChecksumOptions) -> Result<Self, ChecksumError> {
-        let mode = options.mode.clone();
-        let algorithm = options.algorithm.clone();
-        let digest = algorithm.checksum_file(options).await?;
+        // let mode = options.mode.clone();
+        // let algorithm = options.algorithm.clone();
+        let digest = options.algorithm.checksum_file(&options).await?;
 
         Ok(Checksum {
-            mode,
-            algorithm,
+            mode: options.mode,
+            algorithm: options.algorithm,
             digest: hex::encode(digest),
         })
     }
 
     /// Verifies the checksum of a file using the current checksum.
     #[allow(dead_code)]
-    pub async fn verify_file(&self, options: ChecksumOptions) -> Result<bool, ChecksumError> {
+    pub async fn verify_file(&self, options: &ChecksumOptions) -> Result<bool, ChecksumError> {
         let expected =
             hex::decode(&self.digest).map_err(|_| ChecksumError::InvalidChecksumFormat)?;
         let actual = self.algorithm.checksum_file(options).await?;
@@ -266,7 +269,7 @@ impl Checksum {
 }
 
 /// Calculates the checksum of a file using the specified algorithm.
-pub async fn checksum_file(options: ChecksumOptions) -> Result<Vec<u8>, Error> {
+pub async fn checksum_file(options: &ChecksumOptions) -> Result<Vec<u8>, Error> {
     debug!("{:?}", options);
     match options.algorithm {
         ChecksumAlgorithm::MD5 => md5::calculate_md5(options).await,
@@ -280,7 +283,9 @@ pub async fn checksum_file(options: ChecksumOptions) -> Result<Vec<u8>, Error> {
     }
 }
 
-async fn process_file_text<F>(options: ChecksumProcessingOptions<F>) -> Result<(), std::io::Error>
+async fn process_file_text<'a, F>(
+    options: ChecksumProcessingOptions<'a, F>,
+) -> Result<(), std::io::Error>
 where
     F: FnMut(&[u8]),
 {
@@ -341,7 +346,9 @@ where
     Ok(())
 }
 
-async fn process_file_binary<F>(options: ChecksumProcessingOptions<F>) -> Result<(), std::io::Error>
+async fn process_file_binary<'a, F>(
+    options: ChecksumProcessingOptions<'a, F>,
+) -> Result<(), std::io::Error>
 where
     F: FnMut(&[u8]),
 {
@@ -372,7 +379,9 @@ where
 }
 
 /// Calculates the checksum of a file using the specified algorithm.
-async fn process_file<F>(options: ChecksumProcessingOptions<F>) -> Result<(), std::io::Error>
+async fn process_file<'a, F>(
+    options: ChecksumProcessingOptions<'a, F>,
+) -> Result<(), std::io::Error>
 where
     F: FnMut(&[u8]),
 {

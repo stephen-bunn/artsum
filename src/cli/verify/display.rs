@@ -1,6 +1,7 @@
 use std::{
     io::Write,
     sync::{atomic::Ordering, Arc},
+    time::Duration,
 };
 
 use colored::Colorize;
@@ -27,9 +28,9 @@ pub enum DisplayMessage {
     Exit,
 }
 
-pub struct DisplayManager {
+pub struct DisplayManager<'a> {
     tx: tokio::sync::mpsc::Sender<DisplayMessage>,
-    counters: Arc<VerifyTaskCounters>,
+    counters: &'a Arc<VerifyTaskCounters>,
     display_task: Option<tokio::task::JoinHandle<anyhow::Result<()>>>,
     progress_task: Option<tokio::task::JoinHandle<anyhow::Result<()>>>,
     #[allow(dead_code)]
@@ -37,10 +38,10 @@ pub struct DisplayManager {
     disabled: bool,
 }
 
-impl DisplayManager {
+impl<'a> DisplayManager<'a> {
     pub fn new(
         buffier_size: usize,
-        counters: Arc<VerifyTaskCounters>,
+        counters: &'a Arc<VerifyTaskCounters>,
         verbosity: u8,
         disabled: bool,
     ) -> Self {
@@ -128,10 +129,19 @@ impl DisplayManager {
         &mut self,
         sync_tx: tokio::sync::oneshot::Sender<()>,
     ) -> anyhow::Result<()> {
+        self.stop_progress_worker().await;
         if !self.disabled {
-            self.tx.send(DisplayMessage::Exit).await?;
+            if let Err(err) = tokio::time::timeout(
+                Duration::from_millis(100),
+                self.tx.send(DisplayMessage::Exit),
+            )
+            .await
+            {
+                return Err(anyhow::anyhow!("Failed to send exit message: {}", err));
+            }
         }
 
+        tokio::time::sleep(Duration::from_millis(100)).await;
         if let Some(display_task) = self.display_task.take() {
             let _ = display_task.await;
         }
@@ -202,9 +212,9 @@ async fn display_worker(
                 print!("{}", parts.join(" "));
                 if newline {
                     println!();
-                } else {
-                    progress_visible = true;
                 }
+
+                progress_visible = true;
             }
             DisplayMessage::Exit => {
                 break;
@@ -220,7 +230,6 @@ async fn progress_worker(
     tx: tokio::sync::mpsc::Sender<DisplayMessage>,
     counters: Arc<VerifyTaskCounters>,
 ) -> anyhow::Result<()> {
-    let mut last_progress = 0;
     let mut interval = tokio::time::interval(std::time::Duration::from_millis(10));
 
     loop {
@@ -231,16 +240,13 @@ async fn progress_worker(
         let missing = counters.missing.load(Ordering::Relaxed);
         let total = valid + invalid + missing;
 
-        if (total) != last_progress {
-            last_progress = total;
-            tx.send(DisplayMessage::Progress {
-                total,
-                valid,
-                invalid,
-                missing,
-                newline: false,
-            })
-            .await?;
-        }
+        tx.send(DisplayMessage::Progress {
+            total,
+            valid,
+            invalid,
+            missing,
+            newline: false,
+        })
+        .await?;
     }
 }

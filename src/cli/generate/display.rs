@@ -1,6 +1,5 @@
 use std::{
     io::Write,
-    path::PathBuf,
     sync::{atomic::Ordering, Arc},
     time::Duration,
 };
@@ -9,29 +8,33 @@ use colored::Colorize;
 use log::warn;
 
 use super::task::{GenerateTaskCounters, GenerateTaskError, GenerateTaskResult};
-use crate::manifest::{ManifestFormat, ManifestSource};
+use crate::manifest::ManifestSource;
 
 pub enum DisplayMessage {
     Start(ManifestSource),
     Result(GenerateTaskResult),
     Error(GenerateTaskError),
-    Progress { success: usize, error: usize },
+    Progress {
+        success: usize,
+        error: usize,
+        newline: bool,
+    },
     Exit,
 }
 
-pub struct DisplayManager {
+pub struct DisplayManager<'a> {
     tx: tokio::sync::mpsc::Sender<DisplayMessage>,
-    counters: Arc<GenerateTaskCounters>,
+    counters: &'a Arc<GenerateTaskCounters>,
     display_task: Option<tokio::task::JoinHandle<anyhow::Result<()>>>,
     progress_task: Option<tokio::task::JoinHandle<anyhow::Result<()>>>,
     verbosity: u8,
     disabled: bool,
 }
 
-impl DisplayManager {
+impl<'a> DisplayManager<'a> {
     pub fn new(
         buffer_size: usize,
-        counters: Arc<GenerateTaskCounters>,
+        counters: &'a Arc<GenerateTaskCounters>,
         verbosity: u8,
         disabled: bool,
     ) -> Self {
@@ -71,15 +74,9 @@ impl DisplayManager {
         }
     }
 
-    pub async fn report_start(
-        &self,
-        format: ManifestFormat,
-        filepath: PathBuf,
-    ) -> Result<(), anyhow::Error> {
+    pub async fn report_start(&self, manifest_source: ManifestSource) -> anyhow::Result<()> {
         if !self.disabled {
-            self.tx
-                .send(DisplayMessage::Start(ManifestSource { filepath, format }))
-                .await?
+            self.tx.send(DisplayMessage::Start(manifest_source)).await?
         }
         Ok(())
     }
@@ -101,14 +98,37 @@ impl DisplayManager {
         Ok(())
     }
 
+    pub async fn report_progress(&self, newline: bool) -> Result<(), anyhow::Error> {
+        if !self.disabled && self.verbosity >= 1 {
+            self.tx
+                .send(DisplayMessage::Progress {
+                    success: self.counters.success.load(Ordering::Relaxed),
+                    error: self.counters.error.load(Ordering::Relaxed),
+                    newline,
+                })
+                .await?;
+        }
+        Ok(())
+    }
+
     pub async fn report_exit(
         &mut self,
         sync_tx: tokio::sync::oneshot::Sender<()>,
-    ) -> Result<(), anyhow::Error> {
+    ) -> anyhow::Result<()> {
+        self.stop_progress_worker().await;
+
         if !self.disabled {
-            self.tx.send(DisplayMessage::Exit).await?;
+            if let Err(err) = tokio::time::timeout(
+                Duration::from_millis(100),
+                self.tx.send(DisplayMessage::Exit),
+            )
+            .await
+            {
+                return Err(anyhow::anyhow!("Failed to send exit message: {}", err));
+            }
         }
 
+        tokio::time::sleep(Duration::from_millis(100)).await;
         if let Some(display_task) = self.display_task.take() {
             let _ = display_task.await;
         }
@@ -123,13 +143,17 @@ async fn display_worker(
     _verbosity: u8,
 ) -> anyhow::Result<()> {
     let mut progress_visible = false;
-    while let Some(msg) = rx.recv().await {
-        if progress_visible {
+    fn clear_progress(progress_visible: &mut bool) {
+        if *progress_visible {
             print!("\r\x1B[K");
-            progress_visible = false;
+            *progress_visible = false;
         }
+    }
+
+    while let Some(msg) = rx.recv().await {
         match msg {
             DisplayMessage::Start(manifest_source) => {
+                clear_progress(&mut progress_visible);
                 println!(
                     "Generating {} ({})",
                     manifest_source.filepath.canonicalize()?.display(),
@@ -137,16 +161,28 @@ async fn display_worker(
                 );
             }
             DisplayMessage::Result(result) => {
+                clear_progress(&mut progress_visible);
                 println!("{}", result);
             }
             DisplayMessage::Error(error) => {
+                clear_progress(&mut progress_visible);
                 println!("{}", error);
             }
-            DisplayMessage::Progress { success, error } => {
+            DisplayMessage::Progress {
+                success,
+                error,
+                newline,
+            } => {
+                clear_progress(&mut progress_visible);
                 print!("{}", format!("{} added", success).green());
                 if error > 0 {
                     print!(" {}", format!("{} errors", error).red());
                 }
+
+                if newline {
+                    println!();
+                }
+
                 progress_visible = true;
             }
             DisplayMessage::Exit => {
@@ -174,7 +210,12 @@ async fn progress_worker(
 
         if (success + error) != last_progress {
             last_progress = success + error;
-            tx.send(DisplayMessage::Progress { success, error }).await?;
+            tx.send(DisplayMessage::Progress {
+                success,
+                error,
+                newline: false,
+            })
+            .await?;
         }
     }
 }
