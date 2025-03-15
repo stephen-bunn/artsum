@@ -1,5 +1,8 @@
 pub mod md5sum;
 pub mod sfv;
+pub mod sha1sum;
+pub mod sha256sum;
+pub mod sha512sum;
 
 use std::{
     collections::HashMap,
@@ -11,7 +14,7 @@ use async_trait::async_trait;
 use log::{debug, info};
 use strum::IntoEnumIterator;
 
-use crate::checksum::{Checksum, ChecksumAlgorithm};
+use crate::checksum::{Checksum, ChecksumAlgorithm, ChecksumMode};
 
 /// Known errors for manifest operations.
 #[derive(Debug, thiserror::Error)]
@@ -49,6 +52,9 @@ pub enum ManifestError {
 pub enum ManifestFormat {
     SFV,
     MD5SUM,
+    SHA1SUM,
+    SHA256SUM,
+    SHA512SUM,
 }
 
 impl Default for ManifestFormat {
@@ -63,6 +69,9 @@ impl ManifestFormat {
         match self {
             ManifestFormat::SFV => Box::new(sfv::SFVParser::default()),
             ManifestFormat::MD5SUM => Box::new(md5sum::MD5SUMParser::default()),
+            ManifestFormat::SHA1SUM => Box::new(sha1sum::SHA1SUMParser::default()),
+            ManifestFormat::SHA256SUM => Box::new(sha256sum::SHA256SUMParser::default()),
+            ManifestFormat::SHA512SUM => Box::new(sha512sum::SHA512SUMParser::default()),
         }
     }
 }
@@ -206,14 +215,66 @@ pub trait ManifestParser {
     }
 
     /// Parse a manifest source.
-    async fn parse_manifest_source(
-        &self,
-        source: &ManifestSource,
-    ) -> Result<Manifest, ManifestError>;
+    async fn parse(&self, source: &ManifestSource) -> Result<Manifest, ManifestError>;
 
-    /// Parse a manifest file.
+    /// Parse a manifest from a str.
     async fn from_str(&self, data: &str) -> Result<Manifest, ManifestError>;
 
     /// Convert a manifest to a string.
     async fn to_string(&self, manifest: &Manifest) -> Result<String, ManifestError>;
+}
+
+/// The default implementation for parsing a manifest from a string.
+async fn default_from_str(
+    data: &str,
+    algorithm: ChecksumAlgorithm,
+) -> Result<Manifest, ManifestError> {
+    // Parse out the artifacts from a standard md5sum file structure
+    let mut artifacts = HashMap::new();
+
+    for line in data.lines() {
+        // Ignore blank lines or lines starting with a comment character (`#`)
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let parts = line.trim().split_whitespace().collect::<Vec<&str>>();
+        if parts.len() != 2 {
+            continue;
+        }
+
+        let mode = if line.contains("  ") {
+            ChecksumMode::Text
+        } else {
+            ChecksumMode::Binary
+        };
+
+        // Destructure the parts into digest and path
+        let (digest, path) = (parts[0], parts[1]);
+        let checksum = Checksum {
+            mode,
+            algorithm,
+            digest: digest.to_string(),
+        };
+        artifacts.insert(path.trim_start_matches('*').to_string(), checksum);
+    }
+
+    Ok(Manifest {
+        version: None,
+        artifacts,
+    })
+}
+
+/// The default implementation for converting a manifest to a string.
+pub async fn default_to_string(manifest: &Manifest) -> Result<String, ManifestError> {
+    let mut lines = Vec::with_capacity(manifest.artifacts.len());
+    for (path, checksum) in manifest.artifacts.iter() {
+        if checksum.mode == ChecksumMode::Text {
+            lines.push(format!("{}  {}", checksum.digest, path));
+        } else {
+            lines.push(format!("{} {}", checksum.digest, path));
+        }
+    }
+
+    Ok(lines.join("\n"))
 }

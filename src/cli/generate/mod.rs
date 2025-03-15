@@ -1,7 +1,7 @@
 mod display;
 mod task;
 
-use std::{borrow::Cow, cmp::max, collections::HashMap, path::PathBuf};
+use std::{borrow::Cow, cmp::max, collections::HashMap, path::PathBuf, time::Duration};
 
 use display::DisplayManager;
 use log::{debug, info};
@@ -175,9 +175,11 @@ pub async fn generate(options: GenerateOptions) -> GenerateResult<()> {
     .await?;
 
     display_manager.report_progress(true).await?;
+    display_manager.stop_progress_worker().await;
+
+    tokio::time::sleep(Duration::from_millis(10)).await;
     let (sync_tx, sync_rx) = tokio::sync::oneshot::channel::<()>();
     display_manager.report_exit(sync_tx).await?;
-    display_manager.stop_progress_worker().await;
     sync_rx.await.unwrap();
 
     Ok(())

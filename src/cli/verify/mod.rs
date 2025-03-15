@@ -1,4 +1,4 @@
-use std::{cmp::max, path::PathBuf, sync::atomic::Ordering};
+use std::{cmp::max, path::PathBuf, sync::atomic::Ordering, time::Duration};
 
 use display::DisplayManager;
 use log::debug;
@@ -71,9 +71,7 @@ pub async fn verify(options: VerifyOptions) -> VerifyResult<()> {
     };
 
     let manifest_parser = manifest_source.parser();
-    let manifest = manifest_parser
-        .parse_manifest_source(&manifest_source)
-        .await?;
+    let manifest = manifest_parser.parse(&manifest_source).await?;
 
     let mut verify_tasks = Vec::with_capacity(manifest.artifacts.len());
     let verify_task_builder = VerifyTaskBuilder::new(options.max_workers, options.chunk_size);
@@ -110,9 +108,11 @@ pub async fn verify(options: VerifyOptions) -> VerifyResult<()> {
     }
 
     display_manager.report_progress(true).await?;
+    display_manager.stop_progress_worker().await;
+
+    tokio::time::sleep(Duration::from_millis(10)).await;
     let (sync_tx, sync_rx) = tokio::sync::oneshot::channel::<()>();
     display_manager.report_exit(sync_tx).await?;
-    display_manager.stop_progress_worker().await;
     sync_rx.await.unwrap();
 
     if verify_task_builder.counters.invalid.load(Ordering::Relaxed) > 0 {
