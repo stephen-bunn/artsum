@@ -1,13 +1,10 @@
-use std::{cmp::max, path::PathBuf, sync::atomic::Ordering, time::Duration};
+use std::{cmp::max, io, path::PathBuf, sync::atomic::Ordering, time::Duration};
 
 use display::DisplayManager;
 use log::debug;
 use task::VerifyTaskBuilder;
 
-use crate::{
-    checksum::ChecksumError,
-    manifest::{ManifestError, ManifestSource},
-};
+use crate::manifest::ManifestSource;
 
 mod display;
 mod task;
@@ -33,19 +30,16 @@ pub struct VerifyOptions {
 
 #[derive(Debug, thiserror::Error)]
 pub enum VerifyError {
-    #[error("IO Error: {0}")]
+    #[error("{0}")]
     IoError(#[from] std::io::Error),
 
-    #[error("Manifest Error: {0}")]
-    ManifestError(#[from] ManifestError),
+    #[error("{0}")]
+    ManifestError(#[from] crate::manifest::ManifestError),
 
-    #[error("Checksum Error: {0}")]
-    ChecksumError(#[from] ChecksumError),
+    #[error("Failed to join checksum verification task, {0}")]
+    TaskJoinFailure(#[from] tokio::task::JoinError),
 
-    #[error("Task Join Error: {0}")]
-    JoinError(#[from] tokio::task::JoinError),
-
-    #[error("Unknown Error: {0}")]
+    #[error("Unknown error occurred, {0}")]
     Unknown(#[from] anyhow::Error),
 }
 
@@ -54,20 +48,24 @@ pub type VerifyResult<T> = Result<T, VerifyError>;
 pub async fn verify(options: VerifyOptions) -> VerifyResult<()> {
     debug!("{:?}", options);
     if !options.dirpath.is_dir() {
-        return Err(anyhow::anyhow!("No directory exists at {:?}", options.dirpath).into());
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("No directory exists at {:?}", options.dirpath),
+        )
+        .into());
     }
 
+    let dirpath = options.dirpath.clone();
     let manifest_source = if let Some(manifest_filepath) = options.manifest {
-        ManifestSource::from_path(&manifest_filepath).ok_or_else(|| {
-            anyhow::anyhow!("No manifest file found at {}", manifest_filepath.display())
-        })?
+        ManifestSource::from_path(&manifest_filepath).ok_or(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("No manifest file found at {:?}", manifest_filepath),
+        ))?
     } else {
-        ManifestSource::from_path(&options.dirpath).ok_or_else(|| {
-            anyhow::anyhow!(
-                "No manifest file found in directory {}",
-                options.dirpath.display()
-            )
-        })?
+        ManifestSource::from_path(&options.dirpath).ok_or(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("No manifest file found in directory {:?}", dirpath),
+        ))?
     };
 
     let manifest_parser = manifest_source.parser();
@@ -86,8 +84,8 @@ pub async fn verify(options: VerifyOptions) -> VerifyResult<()> {
         options.verbosity,
         options.debug,
     );
-    display_manager.report_start(manifest_source).await?;
 
+    display_manager.report_start(manifest_source).await?;
     if options.show_progress {
         display_manager.start_progress_worker().await?;
     }
@@ -100,7 +98,9 @@ pub async fn verify(options: VerifyOptions) -> VerifyResult<()> {
     }
 
     for task in verify_tasks {
-        let task_result = task.await?;
+        let task_result = task
+            .await
+            .or_else(|err| Err(VerifyError::TaskJoinFailure(err)))?;
         match task_result {
             Ok(result) => display_manager.report_task_result(result).await?,
             Err(error) => display_manager.report_task_error(error).await?,

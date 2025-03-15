@@ -8,11 +8,9 @@ use std::{
 };
 
 use colored::Colorize;
-use log::info;
+use log::{error, info};
 
-use crate::checksum::Checksum;
-
-use super::VerifyError;
+use crate::checksum::{Checksum, ChecksumError};
 
 #[derive(Debug)]
 pub enum VerifyTaskStatus {
@@ -76,6 +74,29 @@ impl Display for VerifyTaskResult {
     }
 }
 
+#[derive(Debug)]
+pub struct VerifyTaskError {
+    pub filepath: String,
+    pub message: String,
+    pub error: Option<ChecksumError>,
+}
+
+impl Display for VerifyTaskError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}: {}{}",
+            self.filepath.dimmed(),
+            self.message.red(),
+            if let Some(error) = &self.error {
+                format!(" ({})", error).red()
+            } else {
+                "".into()
+            }
+        )
+    }
+}
+
 pub struct VerifyTaskCounters {
     pub valid: Arc<AtomicUsize>,
     pub invalid: Arc<AtomicUsize>,
@@ -108,7 +129,7 @@ impl VerifyTaskBuilder {
         base_dirpath: PathBuf,
         filename: &str,
         expected: &Checksum,
-    ) -> tokio::task::JoinHandle<Result<VerifyTaskResult, VerifyError>> {
+    ) -> tokio::task::JoinHandle<Result<VerifyTaskResult, VerifyTaskError>> {
         let worker_permit = self.worker_sempahore.clone();
         let chunk_size = self.chunk_size;
         let counters = self.counters.clone();
@@ -139,25 +160,39 @@ impl VerifyTaskBuilder {
                 chunk_size: Some(chunk_size),
                 progress_callback: None,
             })
-            .await?;
+            .await;
 
-            let status = if actual == expected {
-                counters.valid.fetch_add(1, Ordering::Relaxed);
-                VerifyTaskStatus::Valid
-            } else {
-                counters.invalid.fetch_add(1, Ordering::Relaxed);
-                VerifyTaskStatus::Invalid
-            };
+            match actual {
+                Ok(actual) => {
+                    let status = if actual == expected {
+                        counters.valid.fetch_add(1, Ordering::Relaxed);
+                        VerifyTaskStatus::Valid
+                    } else {
+                        counters.invalid.fetch_add(1, Ordering::Relaxed);
+                        VerifyTaskStatus::Invalid
+                    };
 
-            let result = VerifyTaskResult {
-                status,
-                filename,
-                actual: Some(actual),
-                expected,
-            };
+                    let result = VerifyTaskResult {
+                        status,
+                        filename,
+                        actual: Some(actual),
+                        expected,
+                    };
 
-            info!("{:?}", result);
-            Ok(result)
+                    info!("{:?}", result);
+                    Ok(result)
+                }
+                Err(err) => {
+                    let verify_error = VerifyTaskError {
+                        filepath: filename,
+                        message: String::from("Failed to calculate checksum"),
+                        error: Some(err),
+                    };
+
+                    error!("{:?}", verify_error);
+                    Err(verify_error)
+                }
+            }
         })
     }
 }

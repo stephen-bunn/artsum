@@ -9,15 +9,12 @@ use log::warn;
 
 use crate::{cli::verify::task::VerifyTaskStatus, manifest::ManifestSource};
 
-use super::{
-    task::{VerifyTaskCounters, VerifyTaskResult},
-    VerifyError,
-};
+use super::task::{VerifyTaskCounters, VerifyTaskError, VerifyTaskResult};
 
 pub enum DisplayMessage {
     Start(ManifestSource),
     Result(VerifyTaskResult),
-    Error(VerifyError),
+    Error(VerifyTaskError),
     Progress {
         total: usize,
         valid: usize,
@@ -97,7 +94,7 @@ impl<'a> DisplayManager<'a> {
         Ok(())
     }
 
-    pub async fn report_task_error(&self, error: VerifyError) -> anyhow::Result<()> {
+    pub async fn report_task_error(&self, error: VerifyTaskError) -> anyhow::Result<()> {
         if !self.disabled {
             self.tx.send(DisplayMessage::Error(error)).await?;
         }
@@ -169,17 +166,17 @@ async fn display_worker(
                 clear_progress(&mut progress_visible);
                 println!(
                     "Verifying {} ({})",
-                    manifest_source.filepath.canonicalize()?.display(),
+                    manifest_source.filepath.display(),
                     manifest_source.format
                 );
             }
             DisplayMessage::Result(result) => {
-                clear_progress(&mut progress_visible);
                 if match result.status {
                     VerifyTaskStatus::Invalid => true,
                     VerifyTaskStatus::Missing => verbosity >= 1,
                     VerifyTaskStatus::Valid => verbosity >= 2,
                 } {
+                    clear_progress(&mut progress_visible);
                     println!("{}", result);
                 }
             }
@@ -194,7 +191,6 @@ async fn display_worker(
                 missing,
                 newline,
             } => {
-                clear_progress(&mut progress_visible);
                 let mut parts = vec![format!("{} valid", valid).green().to_string()];
                 if invalid > 0 {
                     parts.push(format!("{} invalid", invalid).bold().red().to_string());
@@ -209,6 +205,7 @@ async fn display_worker(
                         .to_string(),
                 );
 
+                clear_progress(&mut progress_visible);
                 print!("{}", parts.join(" "));
                 if newline {
                     println!();

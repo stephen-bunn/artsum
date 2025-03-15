@@ -1,14 +1,14 @@
 mod display;
 mod task;
 
-use std::{borrow::Cow, cmp::max, collections::HashMap, path::PathBuf, time::Duration};
+use std::{borrow::Cow, cmp::max, collections::HashMap, io, path::PathBuf, time::Duration};
 
 use display::DisplayManager;
 use log::{debug, info};
 use task::GenerateTaskBuilder;
 
 use crate::{
-    checksum::{ChecksumAlgorithm, ChecksumError, ChecksumMode},
+    checksum::{ChecksumAlgorithm, ChecksumMode},
     manifest::{Manifest, ManifestFormat, ManifestSource},
 };
 
@@ -39,22 +39,26 @@ pub struct GenerateOptions {
 
 #[derive(Debug, thiserror::Error)]
 pub enum GenerateError {
-    #[error("Checksum Error: {0}")]
-    ChecksumError(#[from] ChecksumError),
-
-    #[error("IO Error: {0}")]
+    #[error("{0}")]
     IoError(#[from] std::io::Error),
 
-    #[error("Task Join Error: {0}")]
-    JoinError(#[from] tokio::task::JoinError),
+    #[error("Failed to glob pattern, {0}")]
+    PatternGlobFailed(#[from] glob::PatternError),
 
-    #[error("Pattern Error: {0}")]
-    PatternError(#[from] glob::PatternError),
-
-    #[error("Manifest Error: {0}")]
+    #[error("{0}")]
     ManifestError(#[from] crate::manifest::ManifestError),
 
-    #[error("Unknown Error: {0}")]
+    #[error("Unsupported manifest algorithm {algorithm} for format {format}, expected {expected}")]
+    UnsupportedManifestAlgorithm {
+        algorithm: ChecksumAlgorithm,
+        format: ManifestFormat,
+        expected: ChecksumAlgorithm,
+    },
+
+    #[error("Failed to join checksum generation task, {0}")]
+    TaskJoinFailure(#[from] tokio::task::JoinError),
+
+    #[error("Unknown error occurred, {0}")]
     Unknown(#[from] anyhow::Error),
 }
 
@@ -63,7 +67,11 @@ pub type GenerateResult<T> = Result<T, GenerateError>;
 pub async fn generate(options: GenerateOptions) -> GenerateResult<()> {
     debug!("{:?}", options);
     if !options.dirpath.is_dir() {
-        return Err(anyhow::anyhow!("No directory exists at {:?}", options.dirpath).into());
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("No directory exists at {:?}", options.dirpath),
+        )
+        .into());
     }
 
     let manifest_format = options.format.unwrap_or_default();
@@ -78,12 +86,11 @@ pub async fn generate(options: GenerateOptions) -> GenerateResult<()> {
 
     if let Some(algorithm) = options.algorithm {
         if algorithm != checksum_algorithm {
-            return Err(anyhow::anyhow!(
-                "Unsupported algorithm {} for format {}",
+            return Err(GenerateError::UnsupportedManifestAlgorithm {
                 algorithm,
-                manifest_format
-            )
-            .into());
+                format: manifest_format,
+                expected: checksum_algorithm,
+            });
         }
     }
 

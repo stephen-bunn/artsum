@@ -124,11 +124,11 @@ impl GenerateTaskBuilder {
                     counters.success.fetch_add(1, Ordering::Relaxed);
                     Ok(generation_result)
                 }
-                Err(error) => {
+                Err(err) => {
                     let generation_error = GenerateTaskError {
                         filepath: filepath_string,
                         message: String::from("Failed to calculate checksum"),
-                        error: Some(error),
+                        error: Some(err),
                     };
 
                     error!("{:?}", generation_error);
