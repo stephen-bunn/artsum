@@ -37,7 +37,7 @@ sfv-rs generate -x 1 .
 sfv-rs -v generate .
 ```
 
-## Manifest Verificaiton
+## Manifest Verification
 
 ```bash
 # If I'm currently in a directory with a manifest file, I can verify the manifest
