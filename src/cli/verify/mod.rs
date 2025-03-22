@@ -81,6 +81,7 @@ pub async fn verify(options: VerifyOptions) -> VerifyResult<()> {
     let mut display_manager = DisplayManager::new(
         display_manager_buffer_size,
         &verify_task_builder.counters,
+        manifest.artifacts.len(),
         options.verbosity,
         options.debug,
     );

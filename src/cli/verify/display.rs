@@ -28,6 +28,7 @@ pub enum DisplayMessage {
 pub struct DisplayManager<'a> {
     tx: tokio::sync::mpsc::Sender<DisplayMessage>,
     counters: &'a Arc<VerifyTaskCounters>,
+    counters_total: usize,
     display_task: Option<tokio::task::JoinHandle<anyhow::Result<()>>>,
     progress_task: Option<tokio::task::JoinHandle<anyhow::Result<()>>>,
     #[allow(dead_code)]
@@ -39,6 +40,7 @@ impl<'a> DisplayManager<'a> {
     pub fn new(
         buffier_size: usize,
         counters: &'a Arc<VerifyTaskCounters>,
+        counters_total: usize,
         verbosity: u8,
         disabled: bool,
     ) -> Self {
@@ -51,6 +53,7 @@ impl<'a> DisplayManager<'a> {
         Self {
             tx,
             counters,
+            counters_total,
             display_task,
             progress_task: None,
             verbosity,
@@ -67,6 +70,7 @@ impl<'a> DisplayManager<'a> {
         self.progress_task = Some(tokio::spawn(progress_worker(
             self.tx.clone(),
             self.counters.clone(),
+            self.counters_total,
         )));
 
         Ok(())
@@ -226,6 +230,7 @@ async fn display_worker(
 async fn progress_worker(
     tx: tokio::sync::mpsc::Sender<DisplayMessage>,
     counters: Arc<VerifyTaskCounters>,
+    counters_total: usize,
 ) -> anyhow::Result<()> {
     let mut interval = tokio::time::interval(std::time::Duration::from_millis(10));
 
@@ -235,10 +240,9 @@ async fn progress_worker(
         let valid = counters.valid.load(Ordering::Relaxed);
         let invalid = counters.invalid.load(Ordering::Relaxed);
         let missing = counters.missing.load(Ordering::Relaxed);
-        let total = valid + invalid + missing;
 
         tx.send(DisplayMessage::Progress {
-            total,
+            total: counters_total,
             valid,
             invalid,
             missing,

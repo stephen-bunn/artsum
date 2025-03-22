@@ -156,7 +156,11 @@ async fn display_worker(
                 clear_progress(&mut progress_visible);
                 println!(
                     "Generating {} ({})",
-                    manifest_source.filepath.display(),
+                    manifest_source
+                        .filepath
+                        .canonicalize()
+                        .unwrap_or(manifest_source.filepath)
+                        .display(),
                     manifest_source.format,
                 );
             }
