@@ -21,20 +21,12 @@ use crate::checksum::{Checksum, ChecksumAlgorithm, ChecksumMode};
 #[derive(Debug, thiserror::Error)]
 pub enum ManifestError {
     /// Represents errors that occur during IO operations
-    #[error("IO Error: {0}")]
+    #[error("{0}")]
     IoError(#[from] std::io::Error),
 
     /// Wraps a [`ChecksumError`] that occurred during manifest operations
-    #[error("Checksum Error: {0}")]
+    #[error("{0}")]
     ChecksumError(#[from] crate::checksum::ChecksumError),
-
-    /// Occurs when the manifest cannot be properly deserialized from TOML format
-    #[error("Deserialization Error: {0}")]
-    DeserializationFailed(#[from] toml::de::Error),
-
-    /// Occurs when the manifest cannot be properly serialized to TOML format
-    #[error("Serialization Error: {0}")]
-    SerializationFailed(#[from] toml::ser::Error),
 }
 
 /// The format of a manifest file.
@@ -227,11 +219,8 @@ pub trait ManifestParser {
     async fn to_string(&self, manifest: &Manifest) -> Result<String, ManifestError>;
 }
 
-/// The default implementation for parsing a manifest from a string.
-async fn default_from_str(
-    data: &str,
-    algorithm: ChecksumAlgorithm,
-) -> Result<Manifest, ManifestError> {
+/// The GNU implementation of parsing checksum / filename pairs.
+async fn gnu_from_str(data: &str, algorithm: ChecksumAlgorithm) -> Result<Manifest, ManifestError> {
     // Parse out the artifacts from a standard md5sum file structure
     let mut artifacts = HashMap::new();
 
@@ -268,8 +257,8 @@ async fn default_from_str(
     })
 }
 
-/// The default implementation for converting a manifest to a string.
-pub async fn default_to_string(manifest: &Manifest) -> Result<String, ManifestError> {
+/// The GNU implementation of converting a manifest to checksum / filename pairs.
+pub async fn gnu_to_string(manifest: &Manifest) -> Result<String, ManifestError> {
     let mut lines = Vec::with_capacity(manifest.artifacts.len());
     for (path, checksum) in manifest.artifacts.iter() {
         if checksum.mode == ChecksumMode::Text {

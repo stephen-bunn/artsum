@@ -1,9 +1,7 @@
 use async_trait::async_trait;
 use regex::Regex;
 
-use super::{
-    default_from_str, default_to_string, Manifest, ManifestError, ManifestParser, ManifestSource,
-};
+use super::{gnu_from_str, gnu_to_string, Manifest, ManifestError, ManifestParser, ManifestSource};
 use crate::checksum::ChecksumAlgorithm;
 
 pub const DEFAULT_MANIFEST_FILENAME: &str = "sfv.sha512";
@@ -15,7 +13,10 @@ pub struct SHA512SUMParser {
 impl Default for SHA512SUMParser {
     fn default() -> Self {
         SHA512SUMParser {
-            filename_patterns: vec![Regex::new(r"^sfv\.sha512$").unwrap()],
+            filename_patterns: vec![
+                Regex::new(r"^sfv\.sha512$").unwrap(),
+                Regex::new(r"^.*\.sha512$").unwrap(),
+            ],
         }
     }
 }
@@ -40,10 +41,10 @@ impl ManifestParser for SHA512SUMParser {
     }
 
     async fn from_str(&self, data: &str) -> Result<Manifest, ManifestError> {
-        default_from_str(data, self.algorithm().unwrap()).await
+        gnu_from_str(data, self.algorithm().unwrap()).await
     }
 
     async fn to_string(&self, manifest: &Manifest) -> Result<String, ManifestError> {
-        default_to_string(manifest).await
+        gnu_to_string(manifest).await
     }
 }

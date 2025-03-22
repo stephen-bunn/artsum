@@ -1,3 +1,5 @@
+use std::io;
+
 use async_trait::async_trait;
 use regex::Regex;
 use toml;
@@ -39,10 +41,11 @@ impl ManifestParser for SFVParser {
     }
 
     async fn from_str(&self, data: &str) -> Result<Manifest, ManifestError> {
-        toml::from_str(data).map_err(|e| ManifestError::DeserializationFailed(e))
+        toml::from_str(data).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err).into())
     }
 
     async fn to_string(&self, manifest: &Manifest) -> Result<String, ManifestError> {
-        toml::to_string(manifest).map_err(|e| ManifestError::SerializationFailed(e))
+        toml::to_string(manifest)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err).into())
     }
 }
