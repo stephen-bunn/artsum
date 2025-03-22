@@ -5,7 +5,7 @@ Personal manifest checksum generation / verification utility.
 Occssionally I build manifests of large directory structures that I want to detect file changes in.
 I use this to generate a manifest at a point in time for a directory and then run the verification step to detect what files have been touched since I last generated the manifest.
 
-![Demo Video](/assets/demo.mp4)
+https://github.com/user-attachments/assets/53f4519d-2c61-4c75-a9c5-6c1421596670
 
 ## Manifest Generation
 
