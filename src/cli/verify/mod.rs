@@ -22,8 +22,10 @@ pub struct VerifyOptions {
     pub max_workers: usize,
     /// Debug output enabled
     pub debug: bool,
-    /// Show progress output
-    pub show_progress: bool,
+    /// No display output
+    pub no_display: bool,
+    /// No progress output
+    pub no_progress: bool,
     /// Verbosity level
     pub verbosity: u8,
 }
@@ -83,11 +85,11 @@ pub async fn verify(options: VerifyOptions) -> VerifyResult<()> {
         &verify_task_builder.counters,
         manifest.artifacts.len(),
         options.verbosity,
-        options.debug,
+        options.no_display || options.debug,
     );
 
     display_manager.report_start(manifest_source).await?;
-    if options.show_progress && !options.debug {
+    if !options.no_progress && !options.debug {
         display_manager.start_progress_worker().await?;
     }
 

@@ -131,6 +131,7 @@ impl<'a> DisplayManager<'a> {
         sync_tx: tokio::sync::oneshot::Sender<()>,
     ) -> anyhow::Result<()> {
         self.stop_progress_worker().await;
+
         if !self.disabled {
             if let Err(err) = tokio::time::timeout(
                 Duration::from_millis(100),

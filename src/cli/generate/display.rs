@@ -98,8 +98,8 @@ impl<'a> DisplayManager<'a> {
         Ok(())
     }
 
-    pub async fn report_progress(&self, newline: bool) -> Result<(), anyhow::Error> {
-        if !self.disabled && self.verbosity >= 1 {
+    pub async fn report_progress(&self, newline: bool) -> anyhow::Result<()> {
+        if !self.disabled {
             self.tx
                 .send(DisplayMessage::Progress {
                     success: self.counters.success.load(Ordering::Relaxed),

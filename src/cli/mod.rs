@@ -28,6 +28,9 @@ pub struct Cli {
     /// Disable progress output
     #[arg(long, default_value_t = false)]
     pub no_progress: bool,
+    /// Disable display output
+    #[arg(long, default_value_t = false)]
+    pub no_display: bool,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -49,6 +52,16 @@ pub enum Commands {
         #[arg(short, long, default_value = "binary")]
         /// Checksum mode to use for generating checksums
         mode: Option<ChecksumMode>,
+        #[arg(short, long, default_value = "**/*")]
+        /// Glob pattern to filter files
+        glob: Option<String>,
+        /// Regex patterns of the file paths to include in the manifest
+        #[arg(short, long, default_value = None)]
+        include: Option<Vec<String>>,
+        /// Regex patterns of the file paths to exclude from the manifest
+        /// (overrides include patterns)
+        #[arg(short, long, default_value = None)]
+        exclude: Option<Vec<String>>,
         /// Chunk size to use for generating checksums
         #[arg(short, long, default_value_t = DEFAULT_CHUNK_SIZE)]
         chunk_size: usize,
@@ -78,8 +91,15 @@ pub async fn cli() -> anyhow::Result<()> {
     let args = Cli::parse();
 
     if args.debug {
-        simplelog::CombinedLogger::init(vec![
-            simplelog::TermLogger::new(
+        let mut debug_loggers: Vec<Box<dyn simplelog::SharedLogger>> =
+            vec![simplelog::WriteLogger::new(
+                simplelog::LevelFilter::Debug,
+                simplelog::Config::default(),
+                std::fs::File::create(format!("{}_sfv.log", chrono::Local::now().format("%FT%T")))?,
+            )];
+
+        if !args.no_display {
+            debug_loggers.push(simplelog::TermLogger::new(
                 simplelog::LevelFilter::Debug,
                 simplelog::Config::default(),
                 simplelog::TerminalMode::Mixed,
@@ -88,14 +108,9 @@ pub async fn cli() -> anyhow::Result<()> {
                 } else {
                     ColorChoice::Auto
                 },
-            ),
-            simplelog::WriteLogger::new(
-                simplelog::LevelFilter::Debug,
-                simplelog::Config::default(),
-                std::fs::File::create(format!("{}_sfv.log", chrono::Local::now().format("%FT%T")))?,
-            ),
-        ])
-        .unwrap();
+            ))
+        }
+        simplelog::CombinedLogger::init(debug_loggers).unwrap();
     }
 
     if args.no_color {
@@ -110,6 +125,9 @@ pub async fn cli() -> anyhow::Result<()> {
             algorithm,
             format,
             mode,
+            glob,
+            include,
+            exclude,
             chunk_size,
             max_workers,
         }) => {
@@ -119,10 +137,14 @@ pub async fn cli() -> anyhow::Result<()> {
                 algorithm,
                 format,
                 mode,
+                glob,
+                include,
+                exclude,
                 chunk_size,
                 max_workers,
                 debug: args.debug,
-                show_progress: !args.no_progress || args.debug,
+                no_display: args.no_display || args.debug,
+                no_progress: args.no_progress || args.no_display || args.debug,
                 verbosity: args.verbosity,
             })
             .await?;
@@ -139,7 +161,8 @@ pub async fn cli() -> anyhow::Result<()> {
                 chunk_size,
                 max_workers: max_workers.unwrap_or(thread::available_parallelism()?.get()),
                 debug: args.debug,
-                show_progress: !args.no_progress || args.debug,
+                no_display: args.no_display || args.debug,
+                no_progress: args.no_progress || args.no_display || args.debug,
                 verbosity: args.verbosity,
             })
             .await?;
@@ -151,7 +174,8 @@ pub async fn cli() -> anyhow::Result<()> {
                 chunk_size: DEFAULT_CHUNK_SIZE,
                 max_workers: thread::available_parallelism()?.get(),
                 debug: args.debug,
-                show_progress: !args.no_progress || args.debug,
+                no_display: args.no_display || args.debug,
+                no_progress: args.no_progress || args.no_display || args.debug,
                 verbosity: args.verbosity,
             })
             .await?

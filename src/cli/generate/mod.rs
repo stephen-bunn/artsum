@@ -3,14 +3,16 @@ mod task;
 
 use std::{borrow::Cow, cmp::max, collections::HashMap, io, path::PathBuf, time::Duration};
 
-use display::DisplayManager;
 use log::{debug, info};
-use task::GenerateTaskBuilder;
 
 use crate::{
     checksum::{ChecksumAlgorithm, ChecksumMode},
     manifest::{Manifest, ManifestFormat, ManifestSource},
 };
+use display::DisplayManager;
+use task::GenerateTaskBuilder;
+
+const DEFAULT_GLOB_PATTERN: &str = "**/*";
 
 #[derive(Debug)]
 /// Options for generating checksums
@@ -25,14 +27,22 @@ pub struct GenerateOptions {
     pub format: Option<ManifestFormat>,
     /// Optional checksum mode to use
     pub mode: Option<ChecksumMode>,
+    /// Optional glob pattern to filter files
+    pub glob: Option<String>,
+    /// Optional list of file patterns to include in the manifest
+    pub include: Option<Vec<String>>,
+    /// Optional list of file patterns to exclude from the manifest
+    pub exclude: Option<Vec<String>>,
     /// Size of chunks to use when calculating checksums
     pub chunk_size: usize,
     /// Maximum number of worker threads to use for checksum calculation
     pub max_workers: usize,
     /// Debug output is enabled
     pub debug: bool,
-    /// Show progress output
-    pub show_progress: bool,
+    /// Hide display output
+    pub no_display: bool,
+    /// Hide progress output
+    pub no_progress: bool,
     /// Verbosity level for output
     pub verbosity: u8,
 }
@@ -41,6 +51,9 @@ pub struct GenerateOptions {
 pub enum GenerateError {
     #[error("{0}")]
     IoError(#[from] std::io::Error),
+
+    #[error("{0}")]
+    InvalidRegex(#[from] regex::Error),
 
     #[error("Failed to glob pattern, {0}")]
     PatternGlobFailed(#[from] glob::PatternError),
@@ -73,6 +86,22 @@ pub async fn generate(options: GenerateOptions) -> GenerateResult<()> {
         )
         .into());
     }
+
+    let include_patterns: Vec<regex::Regex> = match options.include {
+        Some(include) => include
+            .iter()
+            .map(|pattern| regex::Regex::new(pattern).map_err(GenerateError::InvalidRegex))
+            .collect::<Result<Vec<regex::Regex>, _>>()?,
+        None => vec![],
+    };
+
+    let exclude_patterns: Vec<regex::Regex> = match options.exclude {
+        Some(exclude) => exclude
+            .iter()
+            .map(|pattern| regex::Regex::new(pattern).map_err(GenerateError::InvalidRegex))
+            .collect::<Result<Vec<regex::Regex>, _>>()?,
+        None => vec![],
+    };
 
     let manifest_format = options.format.unwrap_or_default();
     let manifest_parser = manifest_format.parser();
@@ -110,7 +139,7 @@ pub async fn generate(options: GenerateOptions) -> GenerateResult<()> {
         display_manager_buffer_size,
         &generate_task_builder.counters,
         options.verbosity,
-        options.debug,
+        options.no_display || options.debug,
     );
 
     display_manager
@@ -119,13 +148,15 @@ pub async fn generate(options: GenerateOptions) -> GenerateResult<()> {
             format: manifest_format,
         })
         .await?;
-    if options.show_progress && !options.debug {
+    if !options.no_progress && !options.debug {
         display_manager.start_progress_worker().await?;
     }
 
-    let glob_pattern = options.dirpath.join("**/*");
+    let glob_pattern = options
+        .dirpath
+        .join(options.glob.unwrap_or(String::from(DEFAULT_GLOB_PATTERN)));
     for entry in glob::glob_with(
-        glob_pattern.to_str().unwrap_or("**/*"),
+        glob_pattern.to_str().unwrap_or(DEFAULT_GLOB_PATTERN),
         glob::MatchOptions {
             case_sensitive: false,
             require_literal_separator: false,
@@ -142,8 +173,24 @@ pub async fn generate(options: GenerateOptions) -> GenerateResult<()> {
                 continue;
             }
 
-            let generate_task = generate_task_builder.generate_checksum(&path);
-            generate_tasks.push(generate_task);
+            let path_string = path.to_string_lossy();
+            if !exclude_patterns.is_empty()
+                && exclude_patterns.iter().any(|p| p.is_match(&path_string))
+            {
+                debug!("Excluding checksum generation for {:?}", path);
+                continue;
+            }
+
+            if include_patterns.len() > 0 {
+                if include_patterns.iter().any(|p| p.is_match(&path_string)) {
+                    debug!("Including checksum generation for {:?}", path);
+                    let generate_task = generate_task_builder.generate_checksum(&path);
+                    generate_tasks.push(generate_task);
+                }
+            } else {
+                let generate_task = generate_task_builder.generate_checksum(&path);
+                generate_tasks.push(generate_task);
+            }
         }
     }
 
