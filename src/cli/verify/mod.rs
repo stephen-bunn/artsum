@@ -95,9 +95,11 @@ pub async fn verify(options: VerifyOptions) -> VerifyResult<()> {
 
     let dirpath = options.dirpath.clone();
     for (filename, expected) in &manifest.artifacts {
-        let verify_task =
-            verify_task_builder.verify_checksum(dirpath.clone(), &filename, &expected);
-        verify_tasks.push(verify_task);
+        verify_tasks.push(verify_task_builder.verify_checksum(
+            dirpath.clone(),
+            &filename,
+            &expected,
+        ));
     }
 
     for task in verify_tasks {

@@ -184,12 +184,10 @@ pub async fn generate(options: GenerateOptions) -> GenerateResult<()> {
             if include_patterns.len() > 0 {
                 if include_patterns.iter().any(|p| p.is_match(&path_string)) {
                     debug!("Including checksum generation for {:?}", path);
-                    let generate_task = generate_task_builder.generate_checksum(&path);
-                    generate_tasks.push(generate_task);
+                    generate_tasks.push(generate_task_builder.generate_checksum(&path));
                 }
             } else {
-                let generate_task = generate_task_builder.generate_checksum(&path);
-                generate_tasks.push(generate_task);
+                generate_tasks.push(generate_task_builder.generate_checksum(&path));
             }
         }
     }
@@ -201,7 +199,7 @@ pub async fn generate(options: GenerateOptions) -> GenerateResult<()> {
             Ok(result) => {
                 let checksum = result.checksum.clone();
                 if let Some(relative_filepath) =
-                    pathdiff::diff_paths(&result.filepath, &options.dirpath)
+                    pathdiff::diff_paths(&result.filename, &options.dirpath)
                 {
                     artifacts.insert(
                         Cow::from(relative_filepath.to_string_lossy()).into_owned(),

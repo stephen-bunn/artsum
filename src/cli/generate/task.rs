@@ -14,7 +14,7 @@ use crate::checksum::{Checksum, ChecksumAlgorithm, ChecksumError, ChecksumMode, 
 
 #[derive(Debug)]
 pub struct GenerateTaskResult {
-    pub filepath: String,
+    pub filename: String,
     pub checksum: Checksum,
 }
 
@@ -23,14 +23,14 @@ impl Display for GenerateTaskResult {
         write!(
             f,
             "{}",
-            format!("{} {}", self.checksum, self.filepath).dimmed()
+            format!("{} {}", self.checksum, self.filename).dimmed()
         )
     }
 }
 
 #[derive(Debug)]
 pub struct GenerateTaskError {
-    pub filepath: String,
+    pub filename: String,
     pub message: String,
     pub error: Option<ChecksumError>,
 }
@@ -40,7 +40,7 @@ impl Display for GenerateTaskError {
         write!(
             f,
             "{}: {}{}",
-            self.filepath.dimmed(),
+            self.filename.dimmed(),
             self.message.red(),
             if let Some(error) = &self.error {
                 format!(" ({})", error).red()
@@ -67,8 +67,8 @@ pub struct GenerateTaskBuilder {
 impl GenerateTaskBuilder {
     pub fn new(
         max_workers: usize,
-        algorithm: ChecksumAlgorithm,
-        mode: ChecksumMode,
+        checksum_algorithm: ChecksumAlgorithm,
+        checksum_mode: ChecksumMode,
         chunk_size: usize,
     ) -> Self {
         let counters = Arc::new(GenerateTaskCounters {
@@ -78,8 +78,8 @@ impl GenerateTaskBuilder {
 
         Self {
             worker_semaphore: Arc::new(tokio::sync::Semaphore::new(max_workers)),
-            checksum_algorithm: algorithm,
-            checksum_mode: mode,
+            checksum_algorithm,
+            checksum_mode,
             chunk_size,
             counters,
         }
@@ -96,7 +96,7 @@ impl GenerateTaskBuilder {
         let counters = self.counters.clone();
 
         let filepath = filepath.clone();
-        let filepath_string = String::from(filepath.to_string_lossy());
+        let filename = String::from(filepath.to_string_lossy());
 
         tokio::spawn(async move {
             let _permit = worker_permit
@@ -115,10 +115,7 @@ impl GenerateTaskBuilder {
 
             match checksum {
                 Ok(checksum) => {
-                    let generation_result = GenerateTaskResult {
-                        checksum,
-                        filepath: filepath_string,
-                    };
+                    let generation_result = GenerateTaskResult { checksum, filename };
 
                     info!("{:?}", generation_result);
                     counters.success.fetch_add(1, Ordering::Relaxed);
@@ -126,7 +123,7 @@ impl GenerateTaskBuilder {
                 }
                 Err(err) => {
                     let generation_error = GenerateTaskError {
-                        filepath: filepath_string,
+                        filename,
                         message: String::from("Failed to calculate checksum"),
                         error: Some(err),
                     };

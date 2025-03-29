@@ -7,16 +7,19 @@ use std::{
 use colored::Colorize;
 use log::warn;
 
-use super::task::{GenerateTaskCounters, GenerateTaskError, GenerateTaskResult};
-use crate::manifest::ManifestSource;
+use crate::{cli::refresh::task::RefreshTaskStatus, manifest::ManifestSource};
+
+use super::task::{RefreshTaskCounters, RefreshTaskError, RefreshTaskResult};
 
 pub enum DisplayMessage {
     Start(ManifestSource),
-    Result(GenerateTaskResult),
-    Error(GenerateTaskError),
+    Result(RefreshTaskResult),
+    Error(RefreshTaskError),
     Progress {
-        success: usize,
-        error: usize,
+        total: usize,
+        updated: usize,
+        unchanged: usize,
+        removed: usize,
         newline: bool,
     },
     Exit,
@@ -24,9 +27,11 @@ pub enum DisplayMessage {
 
 pub struct DisplayManager<'a> {
     tx: tokio::sync::mpsc::Sender<DisplayMessage>,
-    counters: &'a Arc<GenerateTaskCounters>,
+    counters: &'a Arc<RefreshTaskCounters>,
+    counters_total: usize,
     display_task: Option<tokio::task::JoinHandle<anyhow::Result<()>>>,
     progress_task: Option<tokio::task::JoinHandle<anyhow::Result<()>>>,
+    #[allow(dead_code)]
     verbosity: u8,
     disabled: bool,
 }
@@ -34,7 +39,8 @@ pub struct DisplayManager<'a> {
 impl<'a> DisplayManager<'a> {
     pub fn new(
         buffer_size: usize,
-        counters: &'a Arc<GenerateTaskCounters>,
+        counters: &'a Arc<RefreshTaskCounters>,
+        counters_total: usize,
         verbosity: u8,
         disabled: bool,
     ) -> Self {
@@ -47,6 +53,7 @@ impl<'a> DisplayManager<'a> {
         Self {
             tx,
             counters,
+            counters_total,
             display_task,
             progress_task: None,
             verbosity,
@@ -63,6 +70,7 @@ impl<'a> DisplayManager<'a> {
         self.progress_task = Some(tokio::spawn(progress_worker(
             self.tx.clone(),
             self.counters.clone(),
+            self.counters_total,
         )));
 
         Ok(())
@@ -76,38 +84,45 @@ impl<'a> DisplayManager<'a> {
 
     pub async fn report_start(&self, manifest_source: ManifestSource) -> anyhow::Result<()> {
         if !self.disabled {
-            self.tx.send(DisplayMessage::Start(manifest_source)).await?
+            self.tx.send(DisplayMessage::Start(manifest_source)).await?;
         }
+
         Ok(())
     }
 
-    pub async fn report_task_result(
-        &self,
-        result: GenerateTaskResult,
-    ) -> Result<(), anyhow::Error> {
-        if !self.disabled && self.verbosity >= 1 {
+    pub async fn report_task_result(&self, result: RefreshTaskResult) -> anyhow::Result<()> {
+        if !self.disabled {
             self.tx.send(DisplayMessage::Result(result)).await?;
         }
+
         Ok(())
     }
 
-    pub async fn report_task_error(&self, error: GenerateTaskError) -> Result<(), anyhow::Error> {
+    pub async fn report_task_error(&self, error: RefreshTaskError) -> anyhow::Result<()> {
         if !self.disabled {
             self.tx.send(DisplayMessage::Error(error)).await?;
         }
+
         Ok(())
     }
 
-    pub async fn report_progress(&self, newline: bool) -> Result<(), anyhow::Error> {
+    pub async fn report_progress(&self, newline: bool) -> anyhow::Result<()> {
         if !self.disabled {
+            let updated = self.counters.updated.load(Ordering::Relaxed);
+            let unchanged = self.counters.unchanged.load(Ordering::Relaxed);
+            let removed = self.counters.removed.load(Ordering::Relaxed);
+            let total = updated + unchanged + removed;
             self.tx
                 .send(DisplayMessage::Progress {
-                    success: self.counters.success.load(Ordering::Relaxed),
-                    error: self.counters.error.load(Ordering::Relaxed),
+                    updated,
+                    unchanged,
+                    removed,
+                    total,
                     newline,
                 })
                 .await?;
         }
+
         Ok(())
     }
 
@@ -140,7 +155,7 @@ impl<'a> DisplayManager<'a> {
 
 async fn display_worker(
     mut rx: tokio::sync::mpsc::Receiver<DisplayMessage>,
-    _verbosity: u8,
+    verbosity: u8,
 ) -> anyhow::Result<()> {
     let mut progress_visible = false;
     fn clear_progress(progress_visible: &mut bool) {
@@ -155,34 +170,51 @@ async fn display_worker(
             DisplayMessage::Start(manifest_source) => {
                 clear_progress(&mut progress_visible);
                 println!(
-                    "Generating {} ({})",
-                    manifest_source
-                        .filepath
-                        .canonicalize()
-                        .unwrap_or(manifest_source.filepath)
-                        .display(),
-                    manifest_source.format,
+                    "Refreshing {} ({})",
+                    manifest_source.filepath.display(),
+                    manifest_source.format
                 );
             }
             DisplayMessage::Result(result) => {
-                clear_progress(&mut progress_visible);
-                println!("{}", result);
+                if match result.status {
+                    RefreshTaskStatus::Updated { old: _, new: _ } => true,
+                    RefreshTaskStatus::Removed => true,
+                    RefreshTaskStatus::Unchanged { checksum: _ } => verbosity >= 1,
+                } {
+                    clear_progress(&mut progress_visible);
+                    println!("{}", result);
+                }
             }
             DisplayMessage::Error(error) => {
                 clear_progress(&mut progress_visible);
                 println!("{}", error);
             }
             DisplayMessage::Progress {
-                success,
-                error,
+                total,
+                updated,
+                unchanged,
+                removed,
                 newline,
             } => {
-                clear_progress(&mut progress_visible);
-                print!("{}", format!("{} added", success).green());
-                if error > 0 {
-                    print!(" {}", format!("{} errors", error).red());
+                let mut parts = vec![];
+                if updated > 0 {
+                    parts.push(format!("{} updated", updated).green().to_string());
+                }
+                if unchanged > 0 {
+                    parts.push(format!("{} unchanged", unchanged).blue().to_string());
+                }
+                if removed > 0 {
+                    parts.push(format!("{} removed", removed).yellow().to_string());
                 }
 
+                parts.push(
+                    format!("[{}/{}]", updated + unchanged + removed, total)
+                        .dimmed()
+                        .to_string(),
+                );
+
+                clear_progress(&mut progress_visible);
+                print!("{}", parts.join(" "));
                 if newline {
                     println!();
                 }
@@ -201,25 +233,25 @@ async fn display_worker(
 
 async fn progress_worker(
     tx: tokio::sync::mpsc::Sender<DisplayMessage>,
-    counters: Arc<GenerateTaskCounters>,
+    counters: Arc<RefreshTaskCounters>,
+    counters_total: usize,
 ) -> anyhow::Result<()> {
-    let mut last_progress = 0;
-    let mut interval = tokio::time::interval(Duration::from_millis(10));
+    let mut interval = tokio::time::interval(std::time::Duration::from_millis(10));
 
     loop {
         interval.tick().await;
 
-        let success = counters.success.load(Ordering::Relaxed);
-        let error = counters.error.load(Ordering::Relaxed);
+        let updated = counters.updated.load(Ordering::Relaxed);
+        let unchanged = counters.unchanged.load(Ordering::Relaxed);
+        let removed = counters.removed.load(Ordering::Relaxed);
 
-        if (success + error) != last_progress {
-            last_progress = success + error;
-            tx.send(DisplayMessage::Progress {
-                success,
-                error,
-                newline: false,
-            })
-            .await?;
-        }
+        tx.send(DisplayMessage::Progress {
+            total: counters_total,
+            updated,
+            unchanged,
+            removed,
+            newline: false,
+        })
+        .await?;
     }
 }

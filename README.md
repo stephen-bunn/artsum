@@ -44,7 +44,7 @@ sfv-rs -v generate .
 sfv-rs
 
 # If I'm not in a directory with a manifest file, I can target the directory with the manifest
-sfv-rs verify -m ./FOLDER_WITH_MANIFEST .
+sfv-rs verify -m [MANIFEST_FILEPATH] .
 
 # Control over the checksum chunk size is supported
 sfv-rs verify -c 1024 .
@@ -57,4 +57,25 @@ sfv-rs verify -x 1 .
 # -v will output warnings (such as missing files)
 # -vv will output all verification results (including all successful verifications)
 sfv-rs -vv
+```
+
+## Refresh a Manifest
+
+```bash
+# If I'm currently in a directory with a manifest file, I can refresh the manifest's checksums
+sfv-rs refresh .
+
+# If I'm not in a directory with a manifest file, I can target the directory with the manifest
+sfv-rs refresh -m [MANIFEST_FILEPATH] .
+
+# Control over the checksum chunk size is supported
+sfv-rs refresh -c 1024 .
+
+# Control over the number of checksum workers is supported
+sfv-rs refresh -x 1 .
+
+# Verbose logging is supported on the root command
+# No verbose flag will always output updated or removed artifacts
+# -v will output unchanged files
+sfv-rs -v refresh .
 ```
