@@ -1,12 +1,14 @@
 use std::{cmp::max, io, path::PathBuf, sync::atomic::Ordering, time::Duration};
 
-use display::DisplayManager;
+use colored::Colorize;
 use log::debug;
-use task::VerifyTaskBuilder;
+use task::{
+    VerifyTaskBuilder, VerifyTaskCounters, VerifyTaskError, VerifyTaskResult, VerifyTaskStatus,
+};
 
+use super::common::display::{DisplayManager, DisplayMessage};
 use crate::manifest::ManifestSource;
 
-mod display;
 mod task;
 
 #[derive(Debug)]
@@ -47,6 +49,62 @@ pub enum VerifyError {
 
 pub type VerifyResult<T> = Result<T, VerifyError>;
 
+fn display_message_processor(
+    message: DisplayMessage<VerifyTaskResult, VerifyTaskError, VerifyTaskCounters>,
+    verbosity: u8,
+) -> Option<String> {
+    match message {
+        DisplayMessage::Start(manifest_source) => Some(format!(
+            "Verifying {} ({})",
+            manifest_source.filepath.display(),
+            manifest_source.format
+        )),
+        DisplayMessage::Result(result) => {
+            if match result.status {
+                VerifyTaskStatus::Invalid => true,
+                VerifyTaskStatus::Missing => verbosity >= 1,
+                VerifyTaskStatus::Valid => verbosity >= 2,
+            } {
+                return Some(format!("{}", result));
+            }
+
+            None
+        }
+        DisplayMessage::Error(error) => Some(format!("{}", error)),
+        DisplayMessage::Progress {
+            counters,
+            current,
+            total,
+        } => {
+            let mut parts = vec![format!("{} valid", counters.valid.load(Ordering::Relaxed))
+                .green()
+                .to_string()];
+            if counters.invalid.load(Ordering::Relaxed) > 0 {
+                parts.push(
+                    format!("{} invalid", counters.invalid.load(Ordering::Relaxed))
+                        .bold()
+                        .red()
+                        .to_string(),
+                );
+            }
+            if counters.missing.load(Ordering::Relaxed) > 0 {
+                parts.push(
+                    format!("{} missing", counters.missing.load(Ordering::Relaxed))
+                        .yellow()
+                        .to_string(),
+                );
+            }
+
+            if let Some(total) = total {
+                parts.push(format!("[{}/{}]", current, total).dimmed().to_string());
+            }
+
+            Some(parts.join(" "))
+        }
+        DisplayMessage::Exit => None,
+    }
+}
+
 pub async fn verify(options: VerifyOptions) -> VerifyResult<()> {
     debug!("{:?}", options);
     if !options.dirpath.is_dir() {
@@ -74,24 +132,30 @@ pub async fn verify(options: VerifyOptions) -> VerifyResult<()> {
     let manifest = manifest_parser.parse(&manifest_source).await?;
 
     let mut verify_tasks = Vec::with_capacity(manifest.artifacts.len());
-    let verify_task_builder = VerifyTaskBuilder::new(options.max_workers, options.chunk_size);
-
-    let display_manager_buffer_size = max(
-        1024,
-        options.max_workers * 8 + (options.max_workers.saturating_sub(4) * 4),
-    );
-    let mut display_manager = DisplayManager::new(
-        display_manager_buffer_size,
-        &verify_task_builder.counters,
+    let verify_task_builder = VerifyTaskBuilder::new(
+        options.max_workers,
+        options.chunk_size,
         manifest.artifacts.len(),
-        options.verbosity,
-        options.no_display || options.debug,
     );
 
-    display_manager.report_start(manifest_source).await?;
+    let display_counters = verify_task_builder.counters.clone();
+    let mut display_manager =
+        DisplayManager::<VerifyTaskResult, VerifyTaskError, VerifyTaskCounters>::new(
+            display_counters,
+            display_message_processor,
+        )
+        .with_disabled(options.no_display || options.debug)
+        .with_verbosity(options.verbosity)
+        .with_buffer_size(max(
+            1024,
+            options.max_workers * 8 + (options.max_workers.saturating_sub(4) * 4),
+        ));
+
     if !options.no_progress && !options.debug {
-        display_manager.start_progress_worker().await?;
+        display_manager = display_manager.with_progress(10);
     }
+
+    display_manager.start(manifest_source).await?;
 
     let dirpath = options.dirpath.clone();
     for (filename, expected) in &manifest.artifacts {
@@ -107,17 +171,16 @@ pub async fn verify(options: VerifyOptions) -> VerifyResult<()> {
             .await
             .or_else(|err| Err(VerifyError::TaskJoinFailure(err)))?;
         match task_result {
-            Ok(result) => display_manager.report_task_result(result).await?,
-            Err(error) => display_manager.report_task_error(error).await?,
+            Ok(result) => display_manager.report_result(result).await?,
+            Err(error) => display_manager.report_error(error).await?,
         }
     }
 
-    display_manager.report_progress(true).await?;
-    display_manager.stop_progress_worker().await;
+    display_manager.report_progress().await?;
 
     tokio::time::sleep(Duration::from_millis(10)).await;
     let (sync_tx, sync_rx) = tokio::sync::oneshot::channel::<()>();
-    display_manager.report_exit(sync_tx).await?;
+    display_manager.stop(sync_tx).await?;
     sync_rx.await.unwrap();
 
     if verify_task_builder.counters.invalid.load(Ordering::Relaxed) > 0 {

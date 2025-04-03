@@ -1,3 +1,4 @@
+mod common;
 mod generate;
 mod refresh;
 mod verify;

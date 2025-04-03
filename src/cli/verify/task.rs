@@ -10,7 +10,10 @@ use std::{
 use colored::Colorize;
 use log::{error, info};
 
-use crate::checksum::{Checksum, ChecksumError};
+use crate::{
+    checksum::{Checksum, ChecksumError},
+    cli::common::display::{DisplayCounters, DisplayError, DisplayResult},
+};
 
 #[derive(Debug)]
 pub enum VerifyTaskStatus {
@@ -43,6 +46,7 @@ pub struct VerifyTaskResult {
     pub expected: Checksum,
 }
 
+impl DisplayResult for VerifyTaskResult {}
 impl Display for VerifyTaskResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.status {
@@ -81,6 +85,7 @@ pub struct VerifyTaskError {
     pub error: Option<ChecksumError>,
 }
 
+impl DisplayError for VerifyTaskError {}
 impl Display for VerifyTaskError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
@@ -98,9 +103,22 @@ impl Display for VerifyTaskError {
 }
 
 pub struct VerifyTaskCounters {
+    pub total: Arc<AtomicUsize>,
     pub valid: Arc<AtomicUsize>,
     pub invalid: Arc<AtomicUsize>,
     pub missing: Arc<AtomicUsize>,
+}
+
+impl DisplayCounters for VerifyTaskCounters {
+    fn current(&self) -> usize {
+        self.valid.load(Ordering::Relaxed)
+            + self.invalid.load(Ordering::Relaxed)
+            + self.missing.load(Ordering::Relaxed)
+    }
+
+    fn total(&self) -> Option<usize> {
+        Some(self.total.load(Ordering::Relaxed))
+    }
 }
 
 pub struct VerifyTaskBuilder {
@@ -110,8 +128,9 @@ pub struct VerifyTaskBuilder {
 }
 
 impl VerifyTaskBuilder {
-    pub fn new(max_workers: usize, chunk_size: usize) -> Self {
+    pub fn new(max_workers: usize, chunk_size: usize, total: usize) -> Self {
         let counters = Arc::new(VerifyTaskCounters {
+            total: Arc::new(AtomicUsize::new(total)),
             valid: Arc::new(AtomicUsize::new(0)),
             invalid: Arc::new(AtomicUsize::new(0)),
             missing: Arc::new(AtomicUsize::new(0)),

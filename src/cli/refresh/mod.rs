@@ -1,14 +1,16 @@
-mod display;
 mod task;
 
 use std::{
     cmp::max, collections::HashMap, io, path::PathBuf, sync::atomic::Ordering, time::Duration,
 };
 
-use display::DisplayManager;
+use colored::Colorize;
 use log::{debug, info};
-use task::{RefreshTaskBuilder, RefreshTaskStatus};
+use task::{
+    RefreshTaskBuilder, RefreshTaskCounters, RefreshTaskError, RefreshTaskResult, RefreshTaskStatus,
+};
 
+use super::common::display::{DisplayManager, DisplayMessage};
 use crate::manifest::{Manifest, ManifestSource};
 
 #[derive(Debug)]
@@ -39,6 +41,57 @@ pub enum RefreshError {
 }
 
 pub type RefreshResult<T> = Result<T, RefreshError>;
+
+fn display_message_processor(
+    message: DisplayMessage<RefreshTaskResult, RefreshTaskError, RefreshTaskCounters>,
+    verbosity: u8,
+) -> Option<String> {
+    match message {
+        DisplayMessage::Start(manifest_source) => Some(format!(
+            "Refreshing {} ({})",
+            manifest_source.filepath.display(),
+            manifest_source.format
+        )),
+        DisplayMessage::Result(result) => {
+            if match result.status {
+                RefreshTaskStatus::Updated { .. } => true,
+                RefreshTaskStatus::Removed => true,
+                RefreshTaskStatus::Unchanged { .. } => verbosity >= 1,
+            } {
+                Some(format!("{}", result));
+            }
+
+            None
+        }
+        DisplayMessage::Error(error) => Some(format!("{}", error)),
+        DisplayMessage::Progress {
+            counters,
+            current,
+            total,
+        } => {
+            let mut parts = vec![];
+            let updated = counters.updated.load(Ordering::Relaxed);
+            let unchanged = counters.unchanged.load(Ordering::Relaxed);
+            let removed = counters.removed.load(Ordering::Relaxed);
+            if updated > 0 {
+                parts.push(format!("{} updated", updated).green().to_string());
+            }
+            if unchanged > 0 {
+                parts.push(format!("{} unchanged", unchanged).blue().to_string());
+            }
+            if removed > 0 {
+                parts.push(format!("{} removed", removed).yellow().to_string());
+            }
+
+            if let Some(total) = total {
+                parts.push(format!("[{}/{}]", current, total).dimmed().to_string());
+            }
+
+            Some(parts.join(" "))
+        }
+        DisplayMessage::Exit => None,
+    }
+}
 
 pub async fn refresh(options: RefreshOptions) -> RefreshResult<()> {
     debug!("{:?}", options);
@@ -73,23 +126,30 @@ pub async fn refresh(options: RefreshOptions) -> RefreshResult<()> {
     let manifest_parser = manifest_source.parser();
     let manifest = manifest_parser.parse(&manifest_source).await?;
     let mut refresh_tasks = Vec::with_capacity(manifest.artifacts.len());
-    let refresh_task_builder = RefreshTaskBuilder::new(options.max_workers, options.chunk_size);
-
-    let mut display_manager = DisplayManager::new(
-        max(
-            1024,
-            options.max_workers * 8 + (options.max_workers.saturating_sub(4) * 4),
-        ),
-        &refresh_task_builder.counters,
+    let refresh_task_builder = RefreshTaskBuilder::new(
+        options.max_workers,
+        options.chunk_size,
         manifest.artifacts.len(),
-        options.verbosity,
-        options.no_display || options.debug,
     );
 
-    display_manager.report_start(manifest_source).await?;
+    let display_counters = refresh_task_builder.counters.clone();
+    let mut display_manager = DisplayManager::<
+        RefreshTaskResult,
+        RefreshTaskError,
+        RefreshTaskCounters,
+    >::new(display_counters, display_message_processor)
+    .with_disabled(options.no_display || options.debug)
+    .with_verbosity(options.verbosity)
+    .with_buffer_size(max(
+        1024,
+        options.max_workers * 8 + (options.max_workers.saturating_sub(4) * 4),
+    ));
+
     if !options.no_progress && !options.debug {
-        display_manager.start_progress_worker().await?;
+        display_manager = display_manager.with_progress(10);
     }
+
+    display_manager.start(manifest_source).await?;
 
     for (filename, old) in &manifest.artifacts {
         // TODO: allow the user to override
@@ -118,9 +178,9 @@ pub async fn refresh(options: RefreshOptions) -> RefreshResult<()> {
                     }
                 };
 
-                display_manager.report_task_result(result).await?;
+                display_manager.report_result(result).await?;
             }
-            Err(error) => display_manager.report_task_error(error).await?,
+            Err(error) => display_manager.report_error(error).await?,
         }
     }
 
@@ -136,12 +196,11 @@ pub async fn refresh(options: RefreshOptions) -> RefreshResult<()> {
     )
     .await?;
 
-    display_manager.report_progress(true).await?;
-    display_manager.stop_progress_worker().await;
+    display_manager.report_progress().await?;
 
     tokio::time::sleep(Duration::from_millis(10)).await;
     let (sync_tx, sync_rx) = tokio::sync::oneshot::channel::<()>();
-    display_manager.report_exit(sync_tx).await?;
+    display_manager.stop(sync_tx).await?;
     sync_rx.await.unwrap();
 
     if refresh_task_builder.counters.error.load(Ordering::Relaxed) > 0 {

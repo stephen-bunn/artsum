@@ -10,7 +10,10 @@ use std::{
 use colored::Colorize;
 use log::{error, info};
 
-use crate::checksum::{Checksum, ChecksumAlgorithm, ChecksumError, ChecksumMode, ChecksumOptions};
+use crate::{
+    checksum::{Checksum, ChecksumAlgorithm, ChecksumError, ChecksumMode, ChecksumOptions},
+    cli::common::display::{DisplayCounters, DisplayError, DisplayResult},
+};
 
 #[derive(Debug)]
 pub struct GenerateTaskResult {
@@ -18,6 +21,7 @@ pub struct GenerateTaskResult {
     pub checksum: Checksum,
 }
 
+impl DisplayResult for GenerateTaskResult {}
 impl Display for GenerateTaskResult {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
@@ -35,6 +39,7 @@ pub struct GenerateTaskError {
     pub error: Option<ChecksumError>,
 }
 
+impl DisplayError for GenerateTaskError {}
 impl Display for GenerateTaskError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
@@ -54,6 +59,16 @@ impl Display for GenerateTaskError {
 pub struct GenerateTaskCounters {
     pub success: Arc<AtomicUsize>,
     pub error: Arc<AtomicUsize>,
+}
+
+impl DisplayCounters for GenerateTaskCounters {
+    fn current(&self) -> usize {
+        self.success.load(Ordering::Relaxed) + self.error.load(Ordering::Relaxed)
+    }
+
+    fn total(&self) -> Option<usize> {
+        None
+    }
 }
 
 pub struct GenerateTaskBuilder {

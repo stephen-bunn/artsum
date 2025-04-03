@@ -1,16 +1,19 @@
-mod display;
 mod task;
 
-use std::{borrow::Cow, cmp::max, collections::HashMap, io, path::PathBuf, time::Duration};
+use std::{
+    borrow::Cow, cmp::max, collections::HashMap, io, path::PathBuf, sync::atomic::Ordering,
+    time::Duration,
+};
 
+use colored::Colorize;
 use log::{debug, info};
 
+use super::common::display::{DisplayManager, DisplayMessage};
 use crate::{
     checksum::{ChecksumAlgorithm, ChecksumMode},
     manifest::{Manifest, ManifestFormat, ManifestSource},
 };
-use display::DisplayManager;
-use task::GenerateTaskBuilder;
+use task::{GenerateTaskBuilder, GenerateTaskCounters, GenerateTaskError, GenerateTaskResult};
 
 const DEFAULT_GLOB_PATTERN: &str = "**/*";
 
@@ -77,6 +80,46 @@ pub enum GenerateError {
 
 pub type GenerateResult<T> = Result<T, GenerateError>;
 
+fn display_message_processor(
+    message: DisplayMessage<GenerateTaskResult, GenerateTaskError, GenerateTaskCounters>,
+    verbosity: u8,
+) -> Option<String> {
+    match message {
+        DisplayMessage::Start(manifest_source) => Some(format!(
+            "Generating {} ({})",
+            manifest_source
+                .filepath
+                .canonicalize()
+                .unwrap_or(manifest_source.filepath)
+                .display(),
+            manifest_source.format,
+        )),
+        DisplayMessage::Result(result) => {
+            if verbosity >= 1 {
+                return Some(format!("{}", result));
+            }
+
+            None
+        }
+        DisplayMessage::Error(error) => Some(format!("{}", error)),
+        DisplayMessage::Progress { counters, .. } => {
+            let mut parts = vec![
+                format!("{} added", counters.success.load(Ordering::Relaxed))
+                    .green()
+                    .to_string(),
+            ];
+
+            let error = counters.error.load(Ordering::Relaxed);
+            if error > 0 {
+                parts.push(format!("{} errors", error).red().to_string());
+            }
+
+            Some(parts.join(" "))
+        }
+        DisplayMessage::Exit => None,
+    }
+}
+
 pub async fn generate(options: GenerateOptions) -> GenerateResult<()> {
     debug!("{:?}", options);
     if !options.dirpath.is_dir() {
@@ -131,26 +174,29 @@ pub async fn generate(options: GenerateOptions) -> GenerateResult<()> {
         options.chunk_size,
     );
 
-    let display_manager_buffer_size = max(
+    let display_counters = generate_task_builder.counters.clone();
+    let mut display_manager = DisplayManager::<
+        GenerateTaskResult,
+        GenerateTaskError,
+        GenerateTaskCounters,
+    >::new(display_counters, display_message_processor)
+    .with_disabled(options.no_display || options.debug)
+    .with_verbosity(options.verbosity)
+    .with_buffer_size(max(
         1024,
         options.max_workers * 8 + (options.max_workers.saturating_sub(4) * 4),
-    );
-    let mut display_manager = DisplayManager::new(
-        display_manager_buffer_size,
-        &generate_task_builder.counters,
-        options.verbosity,
-        options.no_display || options.debug,
-    );
+    ));
+
+    if !options.no_progress && !options.debug {
+        display_manager = display_manager.with_progress(10);
+    }
 
     display_manager
-        .report_start(ManifestSource {
+        .start(ManifestSource {
             filepath: manifest_filepath.clone(),
             format: manifest_format,
         })
         .await?;
-    if !options.no_progress && !options.debug {
-        display_manager.start_progress_worker().await?;
-    }
 
     let glob_pattern = options
         .dirpath
@@ -205,11 +251,11 @@ pub async fn generate(options: GenerateOptions) -> GenerateResult<()> {
                         Cow::from(relative_filepath.to_string_lossy()).into_owned(),
                         checksum,
                     );
-                    display_manager.report_task_result(result).await?;
+                    display_manager.report_result(result).await?;
                 }
             }
             Err(error) => {
-                display_manager.report_task_error(error).await?;
+                display_manager.report_error(error).await?;
             }
         }
     }
@@ -226,12 +272,11 @@ pub async fn generate(options: GenerateOptions) -> GenerateResult<()> {
     )
     .await?;
 
-    display_manager.report_progress(true).await?;
-    display_manager.stop_progress_worker().await;
+    display_manager.report_progress().await?;
 
     tokio::time::sleep(Duration::from_millis(10)).await;
     let (sync_tx, sync_rx) = tokio::sync::oneshot::channel::<()>();
-    display_manager.report_exit(sync_tx).await?;
+    display_manager.stop(sync_tx).await?;
     sync_rx.await.unwrap();
 
     Ok(())

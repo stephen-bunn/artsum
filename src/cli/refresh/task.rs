@@ -10,7 +10,10 @@ use std::{
 use colored::Colorize;
 use log::{error, info};
 
-use crate::checksum::{Checksum, ChecksumAlgorithm, ChecksumError, ChecksumMode, ChecksumOptions};
+use crate::{
+    checksum::{Checksum, ChecksumAlgorithm, ChecksumError, ChecksumMode, ChecksumOptions},
+    cli::common::display::{DisplayCounters, DisplayError, DisplayResult},
+};
 
 #[derive(Debug, Clone)]
 pub enum RefreshTaskStatus {
@@ -41,6 +44,7 @@ pub struct RefreshTaskResult {
     pub status: RefreshTaskStatus,
 }
 
+impl DisplayResult for RefreshTaskResult {}
 impl Display for RefreshTaskResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.status {
@@ -75,6 +79,7 @@ pub struct RefreshTaskError {
     pub error: ChecksumError,
 }
 
+impl DisplayError for RefreshTaskError {}
 impl Display for RefreshTaskError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: {}", self.filename.dimmed(), self.error)
@@ -82,10 +87,24 @@ impl Display for RefreshTaskError {
 }
 
 pub struct RefreshTaskCounters {
+    pub total: Arc<AtomicUsize>,
     pub updated: Arc<AtomicUsize>,
     pub unchanged: Arc<AtomicUsize>,
     pub removed: Arc<AtomicUsize>,
     pub error: Arc<AtomicUsize>,
+}
+
+impl DisplayCounters for RefreshTaskCounters {
+    fn current(&self) -> usize {
+        self.updated.load(Ordering::Relaxed)
+            + self.unchanged.load(Ordering::Relaxed)
+            + self.removed.load(Ordering::Relaxed)
+            + self.error.load(Ordering::Relaxed)
+    }
+
+    fn total(&self) -> Option<usize> {
+        Some(self.total.load(Ordering::Relaxed))
+    }
 }
 
 pub struct RefreshTaskBuilder {
@@ -95,8 +114,9 @@ pub struct RefreshTaskBuilder {
 }
 
 impl RefreshTaskBuilder {
-    pub fn new(max_workers: usize, chunk_size: usize) -> Self {
+    pub fn new(max_workers: usize, chunk_size: usize, total: usize) -> Self {
         let counters = Arc::new(RefreshTaskCounters {
+            total: Arc::new(AtomicUsize::new(total)),
             updated: Arc::new(AtomicUsize::new(0)),
             unchanged: Arc::new(AtomicUsize::new(0)),
             removed: Arc::new(AtomicUsize::new(0)),
