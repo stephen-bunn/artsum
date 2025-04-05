@@ -299,7 +299,7 @@ fn display_message_processor(
                 RefreshTaskStatus::Removed => true,
                 RefreshTaskStatus::Unchanged { .. } => verbosity >= 1,
             } {
-                vec![format!("{}", result)];
+                return vec![format!("{}", result)];
             }
 
             vec![]
