@@ -23,50 +23,83 @@ use crate::{
     manifest::ManifestSource,
 };
 
+/// Configuration options for verifying checksums.
+///
+/// Controls the behavior of the verify command, including file selection,
+/// performance tuning, and display preferences.
 #[derive(Debug)]
-/// Options for the verify command
 pub struct VerifyOptions {
     /// Path to the directory containing the files to verify
     pub dirpath: PathBuf,
-    /// Path to the manifest file to verify
+
+    /// Optional explicit path to the manifest file
+    ///
+    /// If not provided, the command will search for manifest files in `dirpath`
     pub manifest: Option<PathBuf>,
-    /// Chunk size to use for generating checksums
+
+    /// Size of chunks to use when calculating checksums (in bytes)
+    ///
+    /// Larger chunks improve performance but use more memory
     pub chunk_size: usize,
-    /// Maximum number of workers to use
+
+    /// Maximum number of concurrent worker threads for checksum calculation
     pub max_workers: usize,
-    /// Debug output enabled
+
+    /// When true, enables debug output and disables progress display
     pub debug: bool,
-    /// No display output
+
+    /// When true, suppresses all display output
     pub no_display: bool,
-    /// No progress output
+
+    /// When true, suppresses progress bar display
     pub no_progress: bool,
-    /// Verbosity level
+
+    /// Controls verbosity level of command output
+    ///
+    /// Higher values produce more detailed output
     pub verbosity: u8,
 }
 
+/// Possible errors that can occur during checksum verification.
 #[derive(Debug, thiserror::Error)]
 pub enum VerifyError {
+    /// I/O errors when reading files or directories
     #[error("{0}")]
     IoError(#[from] std::io::Error),
 
+    /// Error when handling manifests
     #[error("{0}")]
     ManifestError(#[from] crate::manifest::ManifestError),
 
+    /// Error when joining a task fails
     #[error("Failed to join checksum verification task, {0}")]
     TaskJoinFailure(#[from] tokio::task::JoinError),
 
+    /// Unknown or unexpected errors
     #[error("Unknown error occurred, {0}")]
     Unknown(#[from] anyhow::Error),
 }
 
+/// Status of a file verification task.
+///
+/// Represents the result of comparing a file's actual checksum
+/// with its expected checksum from the manifest.
 #[derive(Debug)]
 pub enum VerifyTaskStatus {
+    /// File exists and its checksum matches the expected value
     Valid,
+
+    /// File exists but its checksum does not match the expected value
     Invalid,
+
+    /// File specified in the manifest does not exist
     Missing,
 }
 
 impl VerifyTaskStatus {
+    /// Returns a symbolic representation of the status.
+    ///
+    /// Used for concise display in terminal output.
     pub fn symbol(&self) -> &str {
         match self {
             VerifyTaskStatus::Valid => "✓",
@@ -82,11 +115,22 @@ impl Display for VerifyTaskStatus {
     }
 }
 
+/// Result of a verification task.
+///
+/// Contains the verification status and details about the
+/// expected and actual checksums.
 #[derive(Debug)]
 pub struct VerifyTaskResult {
+    /// Status of the verification (Valid, Invalid, or Missing)
     pub status: VerifyTaskStatus,
+
+    /// Name of the file that was verified
     pub filename: String,
+
+    /// Actual checksum of the file, if it exists
     pub actual: Option<Checksum>,
+
+    /// Expected checksum from the manifest
     pub expected: Checksum,
 }
 
@@ -123,10 +167,18 @@ impl Display for VerifyTaskResult {
     }
 }
 
+/// Error encountered during a verification task.
+///
+/// Contains details about what went wrong when verifying a file.
 #[derive(Debug)]
 pub struct VerifyTaskError {
+    /// Path to the file that caused the error
     pub filepath: String,
+
+    /// Human-readable error message
     pub message: String,
+
+    /// Underlying checksum error, if available
     pub error: Option<ChecksumError>,
 }
 
@@ -148,10 +200,20 @@ impl Display for VerifyTaskError {
     }
 }
 
+/// Counters for tracking the progress of verification tasks.
+///
+/// Maintains atomic counts of files in different verification states.
 pub struct VerifyTaskCounters {
+    /// Total number of files to verify
     pub total: Arc<AtomicUsize>,
+
+    /// Number of files with valid checksums
     pub valid: Arc<AtomicUsize>,
+
+    /// Number of files with invalid checksums
     pub invalid: Arc<AtomicUsize>,
+
+    /// Number of files that are missing
     pub missing: Arc<AtomicUsize>,
 }
 
@@ -168,15 +230,38 @@ impl DisplayCounters for VerifyTaskCounters {
     }
 }
 
+/// Options for configuring a verification task.
+///
+/// Contains all information needed to verify a file against its expected checksum.
 struct VerifyTaskOptions {
+    /// Path to the directory containing the file
     pub dirpath: PathBuf,
+
+    /// Name of the file to verify (relative to dirpath)
     pub filename: String,
+
+    /// Expected checksum from the manifest
     pub expected: Checksum,
+
+    /// Size of chunks to use for checksum calculation (in bytes)
     pub chunk_size: usize,
 }
 
 impl TaskOptions for VerifyTaskOptions {}
 
+/// Processes a verification task asynchronously.
+///
+/// Compares the actual checksum of a file with its expected value from the manifest.
+/// Updates the appropriate counters based on the verification result.
+///
+/// # Arguments
+///
+/// * `options` - Configuration options for the verification task
+/// * `counters` - Shared counters for tracking verification progress
+///
+/// # Returns
+///
+/// A Result containing either a successful verification result or an error
 async fn task_processor(
     options: VerifyTaskOptions,
     counters: Arc<VerifyTaskCounters>,
@@ -223,11 +308,11 @@ async fn task_processor(
             info!("{:?}", result);
             Ok(result)
         }
-        Err(e) => {
+        Err(error) => {
             let error = VerifyTaskError {
                 filepath: filename,
                 message: String::from("Failed to calculate checksum"),
-                error: Some(e),
+                error: Some(error),
             };
 
             error!("{:?}", error);
@@ -236,6 +321,18 @@ async fn task_processor(
     }
 }
 
+/// Wraps the asynchronous task processor in a pinned future.
+///
+/// Creates a boxed and pinned future that can be awaited by the task manager.
+///
+/// # Arguments
+///
+/// * `options` - Configuration options for the verification task
+/// * `counters` - Shared counters for tracking verification progress
+///
+/// # Returns
+///
+/// A pinned future that resolves to a verification result or error
 fn pinned_task_processor(
     options: VerifyTaskOptions,
     counters: Arc<VerifyTaskCounters>,
@@ -243,6 +340,19 @@ fn pinned_task_processor(
     Box::pin(async move { task_processor(options, counters).await })
 }
 
+/// Processes display messages for the verify operation.
+///
+/// Formats messages based on verbosity levels and message types.
+/// Returns a formatted string for display or None if the message should be suppressed.
+///
+/// # Arguments
+///
+/// * `message` - The display message to process
+/// * `verbosity` - The verbosity level (higher values show more details)
+///
+/// # Returns
+///
+/// An optional string to display, or None if the message should be skipped
 fn display_message_processor(
     message: DisplayMessage<VerifyTaskResult, VerifyTaskError, VerifyTaskCounters>,
     verbosity: u8,
@@ -299,6 +409,19 @@ fn display_message_processor(
     }
 }
 
+/// Verifies files against checksums in a manifest file.
+///
+/// Reads a manifest file, compares the expected checksums against the actual
+/// checksums of files, and reports any mismatches or missing files.
+///
+/// # Arguments
+///
+/// * `options` - Configuration options for the verification operation
+///
+/// # Returns
+///
+/// Ok(()) if the verification completed successfully (regardless of file validity),
+/// or an error if the verification process itself failed
 pub async fn verify(options: VerifyOptions) -> Result<(), VerifyError> {
     debug!("{:?}", options);
     if !options.dirpath.is_dir() {
@@ -332,20 +455,11 @@ pub async fn verify(options: VerifyOptions) -> Result<(), VerifyError> {
         missing: Arc::new(AtomicUsize::new(0)),
     });
 
-    let mut task_manager = TaskManager::<
-        VerifyTaskResult,
-        VerifyTaskError,
-        VerifyTaskCounters,
-        VerifyTaskOptions,
-    >::new(task_counters.clone(), pinned_task_processor)
-    .with_task_capacity(manifest.artifacts.len())
-    .with_max_workers(options.max_workers);
+    let mut task_manager = TaskManager::new(task_counters.clone(), pinned_task_processor)
+        .with_task_capacity(manifest.artifacts.len())
+        .with_max_workers(options.max_workers);
 
-    let mut display_manager =
-        DisplayManager::<VerifyTaskResult, VerifyTaskError, VerifyTaskCounters>::new(
-            task_counters.clone(),
-            display_message_processor,
-        )
+    let mut display_manager = DisplayManager::new(task_counters.clone(), display_message_processor)
         .with_disabled(options.no_display || options.debug)
         .with_verbosity(options.verbosity)
         .with_buffer_size(max(

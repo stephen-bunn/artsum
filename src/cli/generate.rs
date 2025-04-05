@@ -17,63 +17,105 @@ use log::{debug, error, info};
 
 use super::common::{
     display::{DisplayCounters, DisplayError, DisplayManager, DisplayMessage, DisplayResult},
-    task::{TaskCounters, TaskError, TaskOptions, TaskProcessorResult, TaskResult},
+    task::{TaskCounters, TaskError, TaskManager, TaskOptions, TaskProcessorResult, TaskResult},
 };
 use crate::{
     checksum::{Checksum, ChecksumAlgorithm, ChecksumError, ChecksumMode, ChecksumOptions},
-    cli::common::task::TaskManager,
     manifest::{Manifest, ManifestFormat, ManifestSource},
 };
 
+/// Default glob pattern used for finding files when none is specified.
 const DEFAULT_GLOB_PATTERN: &str = "**/*";
 
+/// Configuration options for generating checksums.
+///
+/// Controls the behavior of the generate command, including file selection,
+/// checksum algorithm and mode, and display preferences.
 #[derive(Debug)]
-/// Options for generating checksums
 pub struct GenerateOptions {
     /// Path to the directory to generate checksums for
     pub dirpath: PathBuf,
+
     /// Optional output file path for the manifest
+    ///
+    /// If not provided, the manifest will be written to a default location
+    /// based on the chosen format.
     pub output: Option<PathBuf>,
+
     /// Optional checksum algorithm to use
+    ///
+    /// If not provided, the algorithm will be determined by the manifest format
+    /// or default to SHA-256.
     pub algorithm: Option<ChecksumAlgorithm>,
+
     /// Optional format for the manifest
+    ///
+    /// If not provided, defaults to SFV format.
     pub format: Option<ManifestFormat>,
+
     /// Optional checksum mode to use
+    ///
+    /// If not provided, defaults to the standard mode for the algorithm.
     pub mode: Option<ChecksumMode>,
+
     /// Optional glob pattern to filter files
+    ///
+    /// If not provided, uses "**/*" to match all files.
     pub glob: Option<String>,
+
     /// Optional list of file patterns to include in the manifest
+    ///
+    /// Only files matching these regex patterns will be included.
     pub include: Option<Vec<String>>,
+
     /// Optional list of file patterns to exclude from the manifest
+    ///
+    /// Files matching these regex patterns will be excluded.
     pub exclude: Option<Vec<String>>,
-    /// Size of chunks to use when calculating checksums
+
+    /// Size of chunks to use when calculating checksums (in bytes)
+    ///
+    /// Larger chunks improve performance but use more memory.
     pub chunk_size: usize,
-    /// Maximum number of worker threads to use for checksum calculation
+
+    /// Maximum number of concurrent worker threads for checksum calculation
     pub max_workers: usize,
-    /// Debug output is enabled
+
+    /// When true, enables debug output and disables progress display
     pub debug: bool,
-    /// Hide display output
+
+    /// When true, suppresses all display output
     pub no_display: bool,
-    /// Hide progress output
+
+    /// When true, suppresses progress bar display
     pub no_progress: bool,
-    /// Verbosity level for output
+
+    /// Controls verbosity level of command output
+    ///
+    /// Higher values produce more detailed output
     pub verbosity: u8,
 }
 
+/// Possible errors that can occur during checksum generation.
 #[derive(Debug, thiserror::Error)]
 pub enum GenerateError {
+    /// I/O errors when reading files or directories.
     #[error("{0}")]
     IoError(#[from] std::io::Error),
 
+    /// Error when compiling regex patterns.
     #[error("{0}")]
     InvalidRegex(#[from] regex::Error),
 
+    /// Error when globbing for files.
     #[error("Failed to glob pattern, {0}")]
     PatternGlobFailed(#[from] glob::PatternError),
 
+    /// Error when handling manifests.
     #[error("{0}")]
     ManifestError(#[from] crate::manifest::ManifestError),
 
+    /// Error when algorithm doesn't match format requirements.
     #[error("Unsupported manifest algorithm {algorithm} for format {format}, expected {expected}")]
     UnsupportedManifestAlgorithm {
         algorithm: ChecksumAlgorithm,
@@ -84,13 +126,18 @@ pub enum GenerateError {
     #[error("Failed to join checksum generation task, {0}")]
     TaskJoinFailure(#[from] tokio::task::JoinError),
 
+    /// Unknown or unexpected errors.
     #[error("Unknown error occurred, {0}")]
     Unknown(#[from] anyhow::Error),
 }
 
+/// Represents the result of a checksum generation task.
 #[derive(Debug)]
 pub struct GenerateTaskResult {
+    /// Name of the file that was processed.
     pub filename: String,
+
+    /// Calculated checksum of the file.
     pub checksum: Checksum,
 }
 
@@ -106,10 +153,16 @@ impl Display for GenerateTaskResult {
     }
 }
 
+/// Represents an error encountered during a checksum generation task.
 #[derive(Debug)]
 pub struct GenerateTaskError {
+    /// Name of the file that caused the error.
     pub filename: String,
+
+    /// Human-readable error message.
     pub message: String,
+
+    /// Underlying checksum error, if available.
     pub error: Option<ChecksumError>,
 }
 
@@ -131,8 +184,12 @@ impl Display for GenerateTaskError {
     }
 }
 
+/// Counters for tracking the progress of checksum generation tasks.
 pub struct GenerateTaskCounters {
+    /// Number of tasks that completed successfully.
     pub success: Arc<AtomicUsize>,
+
+    /// Number of tasks that encountered errors.
     pub error: Arc<AtomicUsize>,
 }
 
@@ -147,15 +204,29 @@ impl DisplayCounters for GenerateTaskCounters {
     }
 }
 
+/// Options for configuring a checksum generation task.
+///
+/// Contains all information needed to calculate a checksum for a file.
 struct GenerateTaskOptions {
+    /// Path to the file to generate a checksum for
     pub filepath: PathBuf,
+
+    /// Algorithm to use for checksum calculation
     pub algorithm: ChecksumAlgorithm,
+
+    /// Mode to use for checksum calculation
     pub mode: ChecksumMode,
+
+    /// Size of chunks to use for checksum calculation (in bytes)
     pub chunk_size: usize,
 }
 
 impl TaskOptions for GenerateTaskOptions {}
 
+/// Processes a checksum generation task asynchronously.
+///
+/// Calculates the checksum for a file and updates the appropriate counters.
+/// Returns a Result with either the successful task result or an error.
 async fn task_processor(
     options: GenerateTaskOptions,
     counters: Arc<GenerateTaskCounters>,
@@ -193,20 +264,23 @@ async fn task_processor(
             counters.success.fetch_add(1, Ordering::Relaxed);
             Ok(task_result)
         }
-        Err(err) => {
-            let error = GenerateTaskError {
+        Err(error) => {
+            let task_error = GenerateTaskError {
                 filename,
                 message: String::from("Failed to generate checksum"),
-                error: Some(err),
+                error: Some(error),
             };
 
-            error!("{:?}", error);
+            error!("{:?}", task_error);
             counters.error.fetch_add(1, Ordering::Relaxed);
-            Err(error)
+            Err(task_error)
         }
     }
 }
 
+/// Wraps the asynchronous task processor in a pinned future.
+///
+/// Creates a boxed and pinned future that can be awaited by the task manager.
 fn pinned_task_processor(
     options: GenerateTaskOptions,
     counters: Arc<GenerateTaskCounters>,
@@ -214,6 +288,10 @@ fn pinned_task_processor(
     Box::pin(async move { task_processor(options, counters).await })
 }
 
+/// Processes display messages for the generate operation.
+///
+/// Formats messages based on verbosity levels and message types.
+/// Returns a formatted string for display or None if the message should be suppressed.
 fn display_message_processor(
     message: DisplayMessage<GenerateTaskResult, GenerateTaskError, GenerateTaskCounters>,
     verbosity: u8,
@@ -254,6 +332,10 @@ fn display_message_processor(
     }
 }
 
+/// Generates checksums for files and creates a manifest file.
+///
+/// Discovers files in the directory using glob pattern matching,
+/// calculates checksums in parallel, and writes the results to a manifest file.
 pub async fn generate(options: GenerateOptions) -> Result<(), GenerateError> {
     debug!("{:?}", options);
     if !options.dirpath.is_dir() {
@@ -306,25 +388,16 @@ pub async fn generate(options: GenerateOptions) -> Result<(), GenerateError> {
         success: Arc::new(AtomicUsize::new(0)),
         error: Arc::new(AtomicUsize::new(0)),
     });
-    let mut task_manager = TaskManager::<
-        GenerateTaskResult,
-        GenerateTaskError,
-        GenerateTaskCounters,
-        GenerateTaskOptions,
-    >::new(task_counters.clone(), pinned_task_processor)
-    .with_max_workers(options.max_workers);
+    let mut task_manager = TaskManager::new(task_counters.clone(), pinned_task_processor)
+        .with_max_workers(options.max_workers);
 
-    let mut display_manager = DisplayManager::<
-        GenerateTaskResult,
-        GenerateTaskError,
-        GenerateTaskCounters,
-    >::new(task_counters.clone(), display_message_processor)
-    .with_disabled(options.no_display || options.debug)
-    .with_verbosity(options.verbosity)
-    .with_buffer_size(max(
-        1024,
-        options.max_workers * 8 + (options.max_workers.saturating_sub(4) * 4),
-    ));
+    let mut display_manager = DisplayManager::new(task_counters.clone(), display_message_processor)
+        .with_disabled(options.no_display || options.debug)
+        .with_verbosity(options.verbosity)
+        .with_buffer_size(max(
+            1024,
+            options.max_workers * 8 + (options.max_workers.saturating_sub(4) * 4),
+        ));
 
     if !options.no_progress && !options.debug {
         display_manager = display_manager.with_progress(10);

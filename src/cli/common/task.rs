@@ -1,33 +1,91 @@
 use std::{future::Future, pin::Pin, sync::Arc};
 
-use super::display::{DisplayCounters, DisplayError, DisplayResult};
-
+/// Common error types for task management operations.
 #[derive(Debug, thiserror::Error)]
 pub enum TaskManagerError {
+    /// Error when a task join operation fails
     #[error("Failed to join task, {0}")]
     TaskJoinFailure(#[from] tokio::task::JoinError),
 
+    /// Error when acquiring a semaphore permit fails
     #[error("Failed to acquire task worker permit, {0}")]
     TaskPermitFailure(#[from] tokio::sync::AcquireError),
 }
 
-pub trait TaskError: DisplayError {}
-pub trait TaskResult: DisplayResult {}
-pub trait TaskCounters: DisplayCounters {}
+/// Trait for task error types.
+///
+/// Marker trait that indicates a type can be used as a task error.
+/// All implementations must be Send + Sync + 'static.
+pub trait TaskError: Send + Sync + 'static {}
+
+/// Trait for task result types.
+///
+/// Marker trait that indicates a type can be used as a task result.
+/// All implementations must be Send + Sync + 'static.
+pub trait TaskResult: Send + Sync + 'static {}
+
+/// Trait for task counter types.
+///
+/// Marker trait that indicates a type can be used to count and track tasks.
+/// All implementations must be Send + Sync + 'static.
+pub trait TaskCounters: Send + Sync + 'static {}
+
+/// Trait for task option types.
+///
+/// Marker trait that indicates a type can be used to configure tasks.
+/// All implementations must be Send + Sync + 'static.
 pub trait TaskOptions: Send + Sync + 'static {}
 
-pub type TaskProcessorResult<R, E> = Pin<Box<dyn Future<Output = Result<R, E>> + Send + 'static>>;
-pub type TaskProcessor<R, E, C, O> = fn(O, Arc<C>) -> TaskProcessorResult<R, E>;
+/// Type alias for a future that returns a task result or error.
+///
+/// This represents an asynchronous operation that will eventually produce
+/// either a successful result of type TResult or an error of type TError.
+pub type TaskProcessorResult<TResult, TError> =
+    Pin<Box<dyn Future<Output = Result<TResult, TError>> + Send + 'static>>;
 
-pub struct TaskManager<R: TaskResult, E: TaskError, C: TaskCounters, O: TaskOptions> {
-    pub counters: Arc<C>,
-    pub tasks: Vec<tokio::task::JoinHandle<Result<R, E>>>,
-    task_processor: TaskProcessor<R, E, C, O>,
+/// Type alias for a function that processes tasks.
+///
+/// Takes task options TOptions and counters TCounters, and returns a future that resolves
+/// to a result of type TResult or an error of type TError.
+pub type TaskProcessor<TResult, TError, TCounters, TOptions> =
+    fn(TOptions, Arc<TCounters>) -> TaskProcessorResult<TResult, TError>;
+
+/// Manager for concurrent task execution.
+///
+/// Handles spawning and tracking of asynchronous tasks with configurable
+/// concurrency limits. Acts as a builder with method chaining for configuration.
+pub struct TaskManager<
+    TResult: TaskResult,
+    TError: TaskError,
+    TCounters: TaskCounters,
+    TOptions: TaskOptions,
+> {
+    /// Counter tracking task progress
+    pub counters: Arc<TCounters>,
+
+    /// Collection of spawned task handles
+    pub tasks: Vec<tokio::task::JoinHandle<Result<TResult, TError>>>,
+
+    /// Function that processes individual tasks
+    task_processor: TaskProcessor<TResult, TError, TCounters, TOptions>,
+
+    /// Semaphore controlling maximum concurrent workers
     worker_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
-impl<R: TaskResult, E: TaskError, C: TaskCounters, O: TaskOptions> TaskManager<R, E, C, O> {
-    pub fn new(counters: Arc<C>, task_processor: TaskProcessor<R, E, C, O>) -> Self {
+impl<TResult: TaskResult, TError: TaskError, TCounters: TaskCounters, TOptions: TaskOptions>
+    TaskManager<TResult, TError, TCounters, TOptions>
+{
+    /// Creates a new TaskManager instance.
+    ///
+    /// # Arguments
+    ///
+    /// * `counters` - Shared counters for tracking task progress.
+    /// * `task_processor` - Function to process individual tasks.
+    pub fn new(
+        counters: Arc<TCounters>,
+        task_processor: TaskProcessor<TResult, TError, TCounters, TOptions>,
+    ) -> Self {
         Self {
             counters,
             task_processor,
@@ -36,6 +94,15 @@ impl<R: TaskResult, E: TaskError, C: TaskCounters, O: TaskOptions> TaskManager<R
         }
     }
 
+    /// Configures the maximum number of concurrent workers.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_workers` - Maximum number of workers allowed.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `max_workers` is set to 0.
     pub fn with_max_workers(self, max_workers: usize) -> Self {
         if max_workers == 0 {
             panic!("max_workers must be greater than 0");
@@ -53,12 +120,22 @@ impl<R: TaskResult, E: TaskError, C: TaskCounters, O: TaskOptions> TaskManager<R
         self
     }
 
+    /// Configures the task capacity.
+    ///
+    /// # Arguments
+    ///
+    /// * `capacity` - Number of tasks to preallocate space for.
     pub fn with_task_capacity(mut self, capacity: usize) -> Self {
         self.tasks = Vec::with_capacity(capacity);
         self
     }
 
-    pub async fn spawn(&mut self, options: O) {
+    /// Spawns a new task with the given options.
+    ///
+    /// # Arguments
+    ///
+    /// * `options` - Configuration options for the task.
+    pub async fn spawn(&mut self, options: TOptions) {
         let worker_semaphore = self.worker_semaphore.clone();
         let counters = self.counters.clone();
         let task_processor = self.task_processor;

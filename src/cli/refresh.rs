@@ -23,15 +23,40 @@ use crate::{
     manifest::{Manifest, ManifestSource},
 };
 
+/// Configuration options for the manifest refresh operation.
+///
+/// Controls the behavior of the refresh command, including where to find
+/// manifest files, performance tuning, and display options.
 #[derive(Debug)]
 pub struct RefreshOptions {
+    /// Path to the directory containing files referenced in the manifest
     pub dirpath: PathBuf,
+
+    /// Optional explicit path to the manifest file
+    ///
+    /// If not provided, the command will search for manifest files in `dirpath`
     pub manifest: Option<PathBuf>,
+
+    /// Size of chunks to use when calculating checksums (in bytes)
+    ///
+    /// Larger chunks improve performance but use more memory
     pub chunk_size: usize,
+
+    /// Maximum number of concurrent worker threads for checksum calculation
     pub max_workers: usize,
+
+    /// When true, enables debug output and disables progress display
     pub debug: bool,
+
+    /// When true, suppresses all display output
     pub no_display: bool,
+
+    /// When true, suppresses progress bar display
     pub no_progress: bool,
+
+    /// Controls verbosity level of command output
+    ///
+    /// Higher values produce more detailed output
     pub verbosity: u8,
 }
 
@@ -50,10 +75,14 @@ pub enum RefreshError {
     Unknown(#[from] anyhow::Error),
 }
 
+/// Represents the status of a refresh task.
 #[derive(Debug, Clone)]
 pub enum RefreshTaskStatus {
+    /// Indicates that the checksum was updated.
     Updated { old: Checksum, new: Checksum },
+    /// Indicates that the checksum remains unchanged.
     Unchanged { checksum: Checksum },
+    /// Indicates that the file was removed.
     Removed,
 }
 
@@ -73,9 +102,12 @@ impl Display for RefreshTaskStatus {
     }
 }
 
+/// Represents the result of a refresh task.
 #[derive(Debug, Clone)]
 pub struct RefreshTaskResult {
+    /// Name of the file processed by the task.
     pub filename: String,
+    /// Status of the refresh task.
     pub status: RefreshTaskStatus,
 }
 
@@ -109,9 +141,12 @@ impl Display for RefreshTaskResult {
     }
 }
 
+/// Represents an error encountered during a refresh task.
 #[derive(Debug)]
 pub struct RefreshTaskError {
+    /// Name of the file that caused the error.
     pub filename: String,
+    /// Error details.
     pub error: ChecksumError,
 }
 
@@ -123,11 +158,17 @@ impl Display for RefreshTaskError {
     }
 }
 
+/// Counters for tracking the progress of refresh tasks.
 pub struct RefreshTaskCounters {
+    /// Total number of tasks.
     pub total: Arc<AtomicUsize>,
+    /// Number of tasks that updated checksums.
     pub updated: Arc<AtomicUsize>,
+    /// Number of tasks with unchanged checksums.
     pub unchanged: Arc<AtomicUsize>,
+    /// Number of tasks that removed files.
     pub removed: Arc<AtomicUsize>,
+    /// Number of tasks that encountered errors.
     pub error: Arc<AtomicUsize>,
 }
 
@@ -145,16 +186,25 @@ impl DisplayCounters for RefreshTaskCounters {
     }
 }
 
+/// Options for configuring individual refresh tasks.
 struct RefreshTaskOptions {
+    /// Path to the file to be processed.
     pub filepath: PathBuf,
+    /// Existing checksum of the file.
     pub checksum: Checksum,
+    /// Algorithm to use for checksum calculation.
     pub checksum_algorithm: Option<ChecksumAlgorithm>,
+    /// Mode to use for checksum calculation.
     pub checksum_mode: Option<ChecksumMode>,
+    /// Size of chunks to use for checksum calculation.
     pub chunk_size: usize,
 }
 
 impl TaskOptions for RefreshTaskOptions {}
 
+/// Processes a refresh task asynchronously.
+///
+/// Calculates the checksum of the file and determines its status.
 async fn task_processor(
     options: RefreshTaskOptions,
     counters: Arc<RefreshTaskCounters>,
@@ -184,36 +234,24 @@ async fn task_processor(
 
     match new_checksum {
         Ok(new_checksum) => {
-            if new_checksum == checksum {
-                let result = RefreshTaskResult {
-                    filename,
-                    status: RefreshTaskStatus::Unchanged {
-                        checksum: new_checksum,
-                    },
-                };
-
-                info!("{:?}", result);
+            let status = if new_checksum == checksum {
                 counters.unchanged.fetch_add(1, Ordering::Relaxed);
-                Ok(result)
+                RefreshTaskStatus::Unchanged { checksum }
             } else {
-                let result = RefreshTaskResult {
-                    filename,
-                    status: RefreshTaskStatus::Updated {
-                        old: checksum,
-                        new: new_checksum,
-                    },
-                };
-
-                info!("{:?}", result);
                 counters.updated.fetch_add(1, Ordering::Relaxed);
-                Ok(result)
-            }
-        }
-        Err(err) => {
-            let task_error = RefreshTaskError {
-                filename,
-                error: err,
+                RefreshTaskStatus::Updated {
+                    old: checksum,
+                    new: new_checksum,
+                }
             };
+
+            let task_result = RefreshTaskResult { filename, status };
+
+            info!("{:?}", task_result);
+            Ok(task_result)
+        }
+        Err(error) => {
+            let task_error = RefreshTaskError { filename, error };
 
             error!("{:?}", task_error);
             counters.error.fetch_add(1, Ordering::Relaxed);
@@ -222,6 +260,7 @@ async fn task_processor(
     }
 }
 
+/// Wraps the asynchronous task processor in a pinned future.
 fn pinned_task_processor(
     options: RefreshTaskOptions,
     counters: Arc<RefreshTaskCounters>,
@@ -229,6 +268,9 @@ fn pinned_task_processor(
     Box::pin(async move { task_processor(options, counters).await })
 }
 
+/// Processes display messages for the refresh operation.
+///
+/// Formats messages based on verbosity and message type.
 fn display_message_processor(
     message: DisplayMessage<RefreshTaskResult, RefreshTaskError, RefreshTaskCounters>,
     verbosity: u8,
@@ -280,6 +322,10 @@ fn display_message_processor(
     }
 }
 
+/// Refreshes the manifest and updates checksums.
+///
+/// Reads the manifest file, calculates checksums for files, and writes
+/// the updated manifest back to disk.
 pub async fn refresh(options: RefreshOptions) -> Result<(), RefreshError> {
     debug!("{:?}", options);
     if !options.dirpath.is_dir() {
@@ -320,26 +366,17 @@ pub async fn refresh(options: RefreshOptions) -> Result<(), RefreshError> {
         removed: Arc::new(AtomicUsize::new(0)),
         error: Arc::new(AtomicUsize::new(0)),
     });
-    let mut task_manager = TaskManager::<
-        RefreshTaskResult,
-        RefreshTaskError,
-        RefreshTaskCounters,
-        RefreshTaskOptions,
-    >::new(task_counters.clone(), pinned_task_processor)
-    .with_task_capacity(manifest.artifacts.len())
-    .with_max_workers(options.max_workers);
+    let mut task_manager = TaskManager::new(task_counters.clone(), pinned_task_processor)
+        .with_task_capacity(manifest.artifacts.len())
+        .with_max_workers(options.max_workers);
 
-    let mut display_manager = DisplayManager::<
-        RefreshTaskResult,
-        RefreshTaskError,
-        RefreshTaskCounters,
-    >::new(task_counters.clone(), display_message_processor)
-    .with_disabled(options.no_display || options.debug)
-    .with_verbosity(options.verbosity)
-    .with_buffer_size(max(
-        1024,
-        options.max_workers * 8 + (options.max_workers.saturating_sub(4) * 4),
-    ));
+    let mut display_manager = DisplayManager::new(task_counters.clone(), display_message_processor)
+        .with_disabled(options.no_display || options.debug)
+        .with_verbosity(options.verbosity)
+        .with_buffer_size(max(
+            1024,
+            options.max_workers * 8 + (options.max_workers.saturating_sub(4) * 4),
+        ));
 
     if !options.no_progress && !options.debug {
         display_manager = display_manager.with_progress(10);
