@@ -1,19 +1,29 @@
-mod task;
-
 use std::{
-    borrow::Cow, cmp::max, collections::HashMap, io, path::PathBuf, sync::atomic::Ordering,
+    borrow::Cow,
+    cmp::max,
+    collections::HashMap,
+    fmt::Display,
+    io,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
 use colored::Colorize;
-use log::{debug, info};
+use log::{debug, error, info};
 
-use super::common::display::{DisplayManager, DisplayMessage};
+use super::common::{
+    display::{DisplayCounters, DisplayError, DisplayManager, DisplayMessage, DisplayResult},
+    task::{TaskCounters, TaskError, TaskOptions, TaskProcessorResult, TaskResult},
+};
 use crate::{
-    checksum::{ChecksumAlgorithm, ChecksumMode},
+    checksum::{Checksum, ChecksumAlgorithm, ChecksumError, ChecksumMode, ChecksumOptions},
+    cli::common::task::TaskManager,
     manifest::{Manifest, ManifestFormat, ManifestSource},
 };
-use task::{GenerateTaskBuilder, GenerateTaskCounters, GenerateTaskError, GenerateTaskResult};
 
 const DEFAULT_GLOB_PATTERN: &str = "**/*";
 
@@ -78,7 +88,131 @@ pub enum GenerateError {
     Unknown(#[from] anyhow::Error),
 }
 
-pub type GenerateResult<T> = Result<T, GenerateError>;
+#[derive(Debug)]
+pub struct GenerateTaskResult {
+    pub filename: String,
+    pub checksum: Checksum,
+}
+
+impl TaskResult for GenerateTaskResult {}
+impl DisplayResult for GenerateTaskResult {}
+impl Display for GenerateTaskResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            format!("{} {}", self.checksum, self.filename).dimmed()
+        )
+    }
+}
+
+#[derive(Debug)]
+pub struct GenerateTaskError {
+    pub filename: String,
+    pub message: String,
+    pub error: Option<ChecksumError>,
+}
+
+impl TaskError for GenerateTaskError {}
+impl DisplayError for GenerateTaskError {}
+impl Display for GenerateTaskError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}: {}{}",
+            self.filename.dimmed(),
+            self.message.red(),
+            if let Some(error) = &self.error {
+                format!(" ({})", error).red()
+            } else {
+                "".into()
+            }
+        )
+    }
+}
+
+pub struct GenerateTaskCounters {
+    pub success: Arc<AtomicUsize>,
+    pub error: Arc<AtomicUsize>,
+}
+
+impl TaskCounters for GenerateTaskCounters {}
+impl DisplayCounters for GenerateTaskCounters {
+    fn current(&self) -> usize {
+        self.success.load(Ordering::Relaxed) + self.error.load(Ordering::Relaxed)
+    }
+
+    fn total(&self) -> Option<usize> {
+        None
+    }
+}
+
+struct GenerateTaskOptions {
+    pub filepath: PathBuf,
+    pub algorithm: ChecksumAlgorithm,
+    pub mode: ChecksumMode,
+    pub chunk_size: usize,
+}
+
+impl TaskOptions for GenerateTaskOptions {}
+
+async fn task_processor(
+    options: GenerateTaskOptions,
+    counters: Arc<GenerateTaskCounters>,
+) -> Result<GenerateTaskResult, GenerateTaskError> {
+    let filepath = options.filepath.clone();
+    let filename = String::from(filepath.to_string_lossy());
+    let algorithm = options.algorithm;
+    let mode = options.mode;
+
+    if !filepath.is_file() {
+        return Err(GenerateTaskError {
+            filename,
+            message: String::from("File does not exist"),
+            error: Some(ChecksumError::IoError(io::Error::new(
+                io::ErrorKind::NotFound,
+                "File does not exist",
+            ))),
+        });
+    }
+
+    let checksum = Checksum::from_file(ChecksumOptions {
+        filepath,
+        algorithm,
+        mode,
+        chunk_size: Some(options.chunk_size),
+        progress_callback: None,
+    })
+    .await;
+
+    match checksum {
+        Ok(checksum) => {
+            let task_result = GenerateTaskResult { filename, checksum };
+
+            info!("{:?}", task_result);
+            counters.success.fetch_add(1, Ordering::Relaxed);
+            Ok(task_result)
+        }
+        Err(err) => {
+            let error = GenerateTaskError {
+                filename,
+                message: String::from("Failed to generate checksum"),
+                error: Some(err),
+            };
+
+            error!("{:?}", error);
+            counters.error.fetch_add(1, Ordering::Relaxed);
+            Err(error)
+        }
+    }
+}
+
+fn pinned_task_processor(
+    options: GenerateTaskOptions,
+    counters: Arc<GenerateTaskCounters>,
+) -> TaskProcessorResult<GenerateTaskResult, GenerateTaskError> {
+    Box::pin(async move { task_processor(options, counters).await })
+}
 
 fn display_message_processor(
     message: DisplayMessage<GenerateTaskResult, GenerateTaskError, GenerateTaskCounters>,
@@ -120,7 +254,7 @@ fn display_message_processor(
     }
 }
 
-pub async fn generate(options: GenerateOptions) -> GenerateResult<()> {
+pub async fn generate(options: GenerateOptions) -> Result<(), GenerateError> {
     debug!("{:?}", options);
     if !options.dirpath.is_dir() {
         return Err(io::Error::new(
@@ -155,6 +289,8 @@ pub async fn generate(options: GenerateOptions) -> GenerateResult<()> {
     let checksum_algorithm = manifest_parser
         .algorithm()
         .unwrap_or_else(|| options.algorithm.unwrap_or_default());
+    let checksum_mode = options.mode.unwrap_or(ChecksumMode::default());
+    let checksum_chunk_size = options.chunk_size;
 
     if let Some(algorithm) = options.algorithm {
         if algorithm != checksum_algorithm {
@@ -166,20 +302,23 @@ pub async fn generate(options: GenerateOptions) -> GenerateResult<()> {
         }
     }
 
-    let mut generate_tasks = Vec::new();
-    let generate_task_builder = GenerateTaskBuilder::new(
-        options.max_workers,
-        checksum_algorithm,
-        options.mode.unwrap_or(ChecksumMode::default()),
-        options.chunk_size,
-    );
+    let task_counters = Arc::new(GenerateTaskCounters {
+        success: Arc::new(AtomicUsize::new(0)),
+        error: Arc::new(AtomicUsize::new(0)),
+    });
+    let mut task_manager = TaskManager::<
+        GenerateTaskResult,
+        GenerateTaskError,
+        GenerateTaskCounters,
+        GenerateTaskOptions,
+    >::new(task_counters.clone(), pinned_task_processor)
+    .with_max_workers(options.max_workers);
 
-    let display_counters = generate_task_builder.counters.clone();
     let mut display_manager = DisplayManager::<
         GenerateTaskResult,
         GenerateTaskError,
         GenerateTaskCounters,
-    >::new(display_counters, display_message_processor)
+    >::new(task_counters.clone(), display_message_processor)
     .with_disabled(options.no_display || options.debug)
     .with_verbosity(options.verbosity)
     .with_buffer_size(max(
@@ -230,16 +369,30 @@ pub async fn generate(options: GenerateOptions) -> GenerateResult<()> {
             if include_patterns.len() > 0 {
                 if include_patterns.iter().any(|p| p.is_match(&path_string)) {
                     debug!("Including checksum generation for {:?}", path);
-                    generate_tasks.push(generate_task_builder.generate_checksum(&path));
+                    task_manager
+                        .spawn(GenerateTaskOptions {
+                            filepath: path,
+                            algorithm: checksum_algorithm,
+                            mode: checksum_mode,
+                            chunk_size: checksum_chunk_size,
+                        })
+                        .await;
                 }
             } else {
-                generate_tasks.push(generate_task_builder.generate_checksum(&path));
+                task_manager
+                    .spawn(GenerateTaskOptions {
+                        filepath: path,
+                        algorithm: checksum_algorithm,
+                        mode: checksum_mode,
+                        chunk_size: checksum_chunk_size,
+                    })
+                    .await;
             }
         }
     }
 
-    let mut artifacts = HashMap::with_capacity(generate_tasks.len());
-    for task in generate_tasks {
+    let mut artifacts = HashMap::with_capacity(task_manager.tasks.len());
+    for task in task_manager.tasks {
         let task_result = task.await?;
         match task_result {
             Ok(result) => {
