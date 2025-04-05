@@ -47,7 +47,7 @@ The manifest file will contain the checksums of all files in the directory and i
     )]
     Generate {
         /// Pattern to match files against
-        #[arg(value_parser = clap::value_parser!(PathBuf))]
+        #[arg(value_parser = clap::value_parser!(PathBuf), default_value = ".")]
         dirpath: PathBuf,
         #[arg(short, long, default_value = None)]
         /// Path to output the manifest file to
@@ -88,7 +88,7 @@ If no explict manifest file is provided, it will look for a manifest file in the
     )]
     Verify {
         /// Path to the directory containing the files to verify
-        #[arg(value_parser = clap::value_parser!(PathBuf))]
+        #[arg(value_parser = clap::value_parser!(PathBuf), default_value = ".")]
         dirpath: PathBuf,
         /// Path to the manifest file to verify
         #[arg(short, long, value_parser = clap::value_parser!(PathBuf))]
@@ -110,7 +110,7 @@ If no explict manifest file is provided, it will look for a manifest file in the
     )]
     Refresh {
         /// Path to the directory containing the files to refresh
-        #[arg(value_parser = clap::value_parser!(PathBuf))]
+        #[arg(value_parser = clap::value_parser!(PathBuf), default_value = ".")]
         dirpath: PathBuf,
         /// Path to the manifest file to refresh
         #[arg(short, long, value_parser = clap::value_parser!(PathBuf))]

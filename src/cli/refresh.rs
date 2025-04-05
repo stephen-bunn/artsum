@@ -15,7 +15,10 @@ use colored::Colorize;
 use log::{debug, error, info};
 
 use super::common::{
-    display::{DisplayCounters, DisplayError, DisplayManager, DisplayMessage, DisplayResult},
+    display::{
+        DisplayContext, DisplayCounters, DisplayError, DisplayManager, DisplayMessage,
+        DisplayResult,
+    },
     task::{TaskCounters, TaskError, TaskManager, TaskOptions, TaskProcessorResult, TaskResult},
 };
 use crate::{
@@ -268,31 +271,40 @@ fn pinned_task_processor(
     Box::pin(async move { task_processor(options, counters).await })
 }
 
+struct RefreshDisplayContext {}
+
+impl DisplayContext for RefreshDisplayContext {}
+
 /// Processes display messages for the refresh operation.
 ///
 /// Formats messages based on verbosity and message type.
 fn display_message_processor(
-    message: DisplayMessage<RefreshTaskResult, RefreshTaskError, RefreshTaskCounters>,
+    message: DisplayMessage<
+        RefreshTaskResult,
+        RefreshTaskError,
+        RefreshTaskCounters,
+        RefreshDisplayContext,
+    >,
     verbosity: u8,
-) -> Option<String> {
+) -> Vec<String> {
     match message {
-        DisplayMessage::Start(manifest_source) => Some(format!(
+        DisplayMessage::Start(manifest_source, _context) => vec![format!(
             "Refreshing {} ({})",
             manifest_source.filepath.display(),
             manifest_source.format
-        )),
+        )],
         DisplayMessage::Result(result) => {
             if match result.status {
                 RefreshTaskStatus::Updated { .. } => true,
                 RefreshTaskStatus::Removed => true,
                 RefreshTaskStatus::Unchanged { .. } => verbosity >= 1,
             } {
-                Some(format!("{}", result));
+                vec![format!("{}", result)];
             }
 
-            None
+            vec![]
         }
-        DisplayMessage::Error(error) => Some(format!("{}", error)),
+        DisplayMessage::Error(error) => vec![format!("{}", error)],
         DisplayMessage::Progress {
             counters,
             current,
@@ -316,9 +328,9 @@ fn display_message_processor(
                 parts.push(format!("[{}/{}]", current, total).dimmed().to_string());
             }
 
-            Some(parts.join(" "))
+            vec![parts.join(" ")]
         }
-        DisplayMessage::Exit => None,
+        DisplayMessage::Exit => vec![],
     }
 }
 
@@ -382,7 +394,10 @@ pub async fn refresh(options: RefreshOptions) -> Result<(), RefreshError> {
         display_manager = display_manager.with_progress(10);
     }
 
-    display_manager.start(manifest_source).await?;
+    let display_context = RefreshDisplayContext {};
+    display_manager
+        .start(manifest_source, display_context)
+        .await?;
 
     for (filename, old) in &manifest.artifacts {
         task_manager

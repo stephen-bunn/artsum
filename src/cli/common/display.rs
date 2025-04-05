@@ -1,5 +1,7 @@
 use std::{fmt::Display, io::Write, sync::Arc, time::Duration};
 
+use log::warn;
+
 use crate::manifest::ManifestSource;
 
 /// Trait for display error types.
@@ -25,19 +27,29 @@ pub trait DisplayCounters: Send + Sync + 'static {
     fn total(&self) -> Option<usize>;
 }
 
+/// Trait for display context data.
+///
+/// Marker trait indicating a type can be used as a context for display messages.
+pub trait DisplayContext: Send + Sync + 'static {}
+
 /// Type alias for a function that processes display messages.
 ///
 /// Takes a display message and verbosity level, and returns an
-/// optional formatted string to display.
-pub type DisplayMessageProcessor<DResult, DError, DCounters> =
-    fn(DisplayMessage<DResult, DError, DCounters>, u8) -> Option<String>;
+/// array of strings to be displayed on separate lines.
+pub type DisplayMessageProcessor<DResult, DError, DCounters, DContext> =
+    fn(DisplayMessage<DResult, DError, DCounters, DContext>, u8) -> Vec<String>;
 
 /// Types of messages that can be sent to the display manager.
 ///
 /// Generic over result type DResult, error type DEerror, and counter type DCounters.
-pub enum DisplayMessage<DResult: DisplayResult, DError: DisplayError, DCounters: DisplayCounters> {
+pub enum DisplayMessage<
+    DResult: DisplayResult,
+    DError: DisplayError,
+    DCounters: DisplayCounters,
+    DContext: DisplayContext,
+> {
     /// Indicates the start of an operation with a source context
-    Start(ManifestSource),
+    Start(ManifestSource, DContext),
 
     /// Contains a successful result to be displayed
     Result(DResult),
@@ -66,16 +78,20 @@ pub enum DisplayMessage<DResult: DisplayResult, DError: DisplayError, DCounters:
 /// Acts as a central point for formatting and showing output from
 /// concurrent operations. Provides progress bar functionality and
 /// configurable verbosity levels.
-pub struct DisplayManager<DResult: DisplayResult, DError: DisplayError, DCounters: DisplayCounters>
-{
+pub struct DisplayManager<
+    DResult: DisplayResult,
+    DError: DisplayError,
+    DCounters: DisplayCounters,
+    DContext: DisplayContext,
+> {
     /// Channel for sending display messages
-    tx: Option<tokio::sync::mpsc::Sender<DisplayMessage<DResult, DError, DCounters>>>,
+    tx: Option<tokio::sync::mpsc::Sender<DisplayMessage<DResult, DError, DCounters, DContext>>>,
 
     /// Counters tracking task progress
     counters: Arc<DCounters>,
 
     /// Function that processes display messages into strings
-    display_message_processor: DisplayMessageProcessor<DResult, DError, DCounters>,
+    display_message_processor: DisplayMessageProcessor<DResult, DError, DCounters, DContext>,
 
     /// Task that consumes and displays messages
     display_message_consumer: Option<tokio::task::JoinHandle<anyhow::Result<()>>>,
@@ -96,8 +112,12 @@ pub struct DisplayManager<DResult: DisplayResult, DError: DisplayError, DCounter
     pub buffer_size: usize,
 }
 
-impl<DResult: DisplayResult, DError: DisplayError, DCounters: DisplayCounters>
-    DisplayManager<DResult, DError, DCounters>
+impl<
+        DResult: DisplayResult,
+        DError: DisplayError,
+        DCounters: DisplayCounters,
+        DContext: DisplayContext,
+    > DisplayManager<DResult, DError, DCounters, DContext>
 {
     /// Creates a new DisplayManager with the given counters and message processor.
     ///
@@ -107,7 +127,7 @@ impl<DResult: DisplayResult, DError: DisplayError, DCounters: DisplayCounters>
     /// * `message_processor` - Function that formats display messages into strings
     pub fn new(
         counters: Arc<DCounters>,
-        message_processor: DisplayMessageProcessor<DResult, DError, DCounters>,
+        message_processor: DisplayMessageProcessor<DResult, DError, DCounters, DContext>,
     ) -> Self {
         Self {
             tx: None,
@@ -179,7 +199,11 @@ impl<DResult: DisplayResult, DError: DisplayError, DCounters: DisplayCounters>
     /// # Errors
     ///
     /// Returns an error if message sending fails
-    pub async fn start(&mut self, manifest_source: ManifestSource) -> anyhow::Result<()> {
+    pub async fn start(
+        &mut self,
+        manifest_source: ManifestSource,
+        context: DContext,
+    ) -> anyhow::Result<()> {
         if self.disabled {
             return Ok(());
         }
@@ -200,7 +224,8 @@ impl<DResult: DisplayResult, DError: DisplayError, DCounters: DisplayCounters>
             )));
         }
 
-        tx.send(DisplayMessage::Start(manifest_source)).await?;
+        tx.send(DisplayMessage::Start(manifest_source, context))
+            .await?;
         Ok(())
     }
 
@@ -296,9 +321,10 @@ async fn display_message_consumer<
     DResult: DisplayResult,
     DError: DisplayError,
     DCounters: DisplayCounters,
+    DContext: DisplayContext,
 >(
-    mut rx: tokio::sync::mpsc::Receiver<DisplayMessage<DResult, DError, DCounters>>,
-    message_processor: DisplayMessageProcessor<DResult, DError, DCounters>,
+    mut rx: tokio::sync::mpsc::Receiver<DisplayMessage<DResult, DError, DCounters, DContext>>,
+    message_processor: DisplayMessageProcessor<DResult, DError, DCounters, DContext>,
     verbosity: u8,
 ) -> anyhow::Result<()> {
     let mut progress_visible = false;
@@ -316,17 +342,20 @@ async fn display_message_consumer<
 
         clear_progress(&mut progress_visible);
         if matches!(message, DisplayMessage::Progress { .. }) {
-            if let Some(message) = message_processor(message, verbosity) {
-                print!("{}", message);
-                progress_visible = true;
-            } else {
+            let messages = message_processor(message, verbosity);
+            if messages.len() == 0 {
                 continue;
+            } else if messages.len() > 1 {
+                warn!("Received multiple lines for progress message, only the first line will be displayed");
+            }
+
+            if let Some(first_message) = messages.get(0) {
+                print!("{}", first_message);
+                progress_visible = true;
             }
         } else {
-            if let Some(message) = message_processor(message, verbosity) {
+            for message in message_processor(message, verbosity) {
                 println!("{}", message);
-            } else {
-                continue;
             }
         }
 
@@ -340,8 +369,9 @@ async fn progress_message_producer<
     DResult: DisplayResult,
     DError: DisplayError,
     DCounters: DisplayCounters,
+    DContext: DisplayContext,
 >(
-    tx: tokio::sync::mpsc::Sender<DisplayMessage<DResult, DError, DCounters>>,
+    tx: tokio::sync::mpsc::Sender<DisplayMessage<DResult, DError, DCounters, DContext>>,
     counters: Arc<DCounters>,
     refresh_millis: u64,
 ) -> anyhow::Result<()> {

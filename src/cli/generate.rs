@@ -16,7 +16,10 @@ use colored::Colorize;
 use log::{debug, error, info};
 
 use super::common::{
-    display::{DisplayCounters, DisplayError, DisplayManager, DisplayMessage, DisplayResult},
+    display::{
+        DisplayContext, DisplayCounters, DisplayError, DisplayManager, DisplayMessage,
+        DisplayResult,
+    },
     task::{TaskCounters, TaskError, TaskManager, TaskOptions, TaskProcessorResult, TaskResult},
 };
 use crate::{
@@ -288,32 +291,70 @@ fn pinned_task_processor(
     Box::pin(async move { task_processor(options, counters).await })
 }
 
+/// Context for displaying messages during the generate operation.
+struct GenerateDisplayContext {
+    /// The manifest source file being processed.
+    pub manifest_filepath: PathBuf,
+    /// The directory path where the manifest file is located.
+    pub manifest_dirpath: PathBuf,
+    /// The checksum algorithm used for the operation.
+    pub checksum_algorithm: ChecksumAlgorithm,
+    /// The checksum mode used for the operation.
+    pub checksum_mode: ChecksumMode,
+}
+
+impl DisplayContext for GenerateDisplayContext {}
+
 /// Processes display messages for the generate operation.
 ///
 /// Formats messages based on verbosity levels and message types.
 /// Returns a formatted string for display or None if the message should be suppressed.
 fn display_message_processor(
-    message: DisplayMessage<GenerateTaskResult, GenerateTaskError, GenerateTaskCounters>,
+    message: DisplayMessage<
+        GenerateTaskResult,
+        GenerateTaskError,
+        GenerateTaskCounters,
+        GenerateDisplayContext,
+    >,
     verbosity: u8,
-) -> Option<String> {
+) -> Vec<String> {
     match message {
-        DisplayMessage::Start(manifest_source) => Some(format!(
-            "Generating {} ({})",
-            manifest_source
-                .filepath
-                .canonicalize()
-                .unwrap_or(manifest_source.filepath)
-                .display(),
-            manifest_source.format,
-        )),
+        DisplayMessage::Start(manifest_source, context) => {
+            let mut lines = vec![format!(
+                "Generating manifest for {} ({})",
+                context.manifest_dirpath.to_string_lossy(),
+                context
+                    .manifest_filepath
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy(),
+            )];
+
+            lines.push(
+                format!(
+                    "Using manifest format {} with checksum algorithm {}{}",
+                    manifest_source.format,
+                    context.checksum_algorithm,
+                    if context.checksum_mode == ChecksumMode::Text {
+                        format!(" ({})", context.checksum_mode)
+                    } else {
+                        String::new()
+                    }
+                )
+                .dimmed()
+                .to_string(),
+            );
+
+            return lines;
+        }
         DisplayMessage::Result(result) => {
             if verbosity >= 1 {
-                return Some(format!("{}", result));
+                return vec![format!("{}", result)];
             }
 
-            None
+            vec![]
         }
-        DisplayMessage::Error(error) => Some(format!("{}", error)),
+        DisplayMessage::Error(error) => vec![format!("{}", error)],
         DisplayMessage::Progress { counters, .. } => {
             let mut parts = vec![
                 format!("{} added", counters.success.load(Ordering::Relaxed))
@@ -326,9 +367,9 @@ fn display_message_processor(
                 parts.push(format!("{} errors", error).red().to_string());
             }
 
-            Some(parts.join(" "))
+            vec![parts.join(" ")]
         }
-        DisplayMessage::Exit => None,
+        DisplayMessage::Exit => vec![],
     }
 }
 
@@ -364,9 +405,11 @@ pub async fn generate(options: GenerateOptions) -> Result<(), GenerateError> {
 
     let manifest_format = options.format.unwrap_or_default();
     let manifest_parser = manifest_format.parser();
+    let manifest_dirpath = options.dirpath.canonicalize()?;
+
     let manifest_filepath = options
         .output
-        .unwrap_or(manifest_parser.build_manifest_filepath(Some(&options.dirpath)));
+        .unwrap_or(manifest_parser.build_manifest_filepath(Some(&manifest_dirpath)));
 
     let checksum_algorithm = manifest_parser
         .algorithm()
@@ -403,16 +446,25 @@ pub async fn generate(options: GenerateOptions) -> Result<(), GenerateError> {
         display_manager = display_manager.with_progress(10);
     }
 
+    let display_context = GenerateDisplayContext {
+        manifest_filepath: manifest_filepath.clone(),
+        manifest_dirpath: manifest_dirpath.clone(),
+        checksum_algorithm,
+        checksum_mode,
+    };
+
     display_manager
-        .start(ManifestSource {
-            filepath: manifest_filepath.clone(),
-            format: manifest_format,
-        })
+        .start(
+            ManifestSource {
+                filepath: manifest_filepath.clone(),
+                format: manifest_format,
+            },
+            display_context,
+        )
         .await?;
 
-    let glob_pattern = options
-        .dirpath
-        .join(options.glob.unwrap_or(String::from(DEFAULT_GLOB_PATTERN)));
+    let glob_pattern =
+        manifest_dirpath.join(options.glob.unwrap_or(String::from(DEFAULT_GLOB_PATTERN)));
     for entry in glob::glob_with(
         glob_pattern.to_str().unwrap_or(DEFAULT_GLOB_PATTERN),
         glob::MatchOptions {
@@ -422,29 +474,36 @@ pub async fn generate(options: GenerateOptions) -> Result<(), GenerateError> {
         },
     )? {
         if let Ok(path) = entry {
-            if !path.exists()
-                || path.is_dir()
-                || path.is_symlink()
-                || options.dirpath.join(&path) == manifest_filepath
-            {
+            if !path.exists() || path.is_dir() || path.is_symlink() {
                 debug!("Skipping path {:?}", path);
                 continue;
             }
 
-            let path_string = path.to_string_lossy();
+            let canonical_path = path.canonicalize()?;
+            if canonical_path == manifest_filepath {
+                debug!("Skipping manifest file {:?}", path);
+                continue;
+            }
+
+            let canonical_path_string = canonical_path.to_string_lossy();
             if !exclude_patterns.is_empty()
-                && exclude_patterns.iter().any(|p| p.is_match(&path_string))
+                && exclude_patterns
+                    .iter()
+                    .any(|p| p.is_match(&canonical_path_string))
             {
                 debug!("Excluding checksum generation for {:?}", path);
                 continue;
             }
 
             if include_patterns.len() > 0 {
-                if include_patterns.iter().any(|p| p.is_match(&path_string)) {
+                if include_patterns
+                    .iter()
+                    .any(|p| p.is_match(&canonical_path_string))
+                {
                     debug!("Including checksum generation for {:?}", path);
                     task_manager
                         .spawn(GenerateTaskOptions {
-                            filepath: path,
+                            filepath: canonical_path,
                             algorithm: checksum_algorithm,
                             mode: checksum_mode,
                             chunk_size: checksum_chunk_size,
@@ -454,7 +513,7 @@ pub async fn generate(options: GenerateOptions) -> Result<(), GenerateError> {
             } else {
                 task_manager
                     .spawn(GenerateTaskOptions {
-                        filepath: path,
+                        filepath: canonical_path,
                         algorithm: checksum_algorithm,
                         mode: checksum_mode,
                         chunk_size: checksum_chunk_size,
@@ -471,7 +530,7 @@ pub async fn generate(options: GenerateOptions) -> Result<(), GenerateError> {
             Ok(result) => {
                 let checksum = result.checksum.clone();
                 if let Some(relative_filepath) =
-                    pathdiff::diff_paths(&result.filename, &options.dirpath)
+                    pathdiff::diff_paths(&result.filename, &manifest_dirpath)
                 {
                     artifacts.insert(
                         Cow::from(relative_filepath.to_string_lossy()).into_owned(),

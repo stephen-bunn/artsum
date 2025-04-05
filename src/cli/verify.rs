@@ -14,7 +14,10 @@ use colored::Colorize;
 use log::{debug, error, info};
 
 use super::common::{
-    display::{DisplayCounters, DisplayError, DisplayManager, DisplayMessage, DisplayResult},
+    display::{
+        DisplayContext, DisplayCounters, DisplayError, DisplayManager, DisplayMessage,
+        DisplayResult,
+    },
     task::{TaskCounters, TaskError, TaskManager, TaskOptions, TaskProcessorResult, TaskResult},
 };
 
@@ -340,6 +343,10 @@ fn pinned_task_processor(
     Box::pin(async move { task_processor(options, counters).await })
 }
 
+struct VerifyDisplayContext {}
+
+impl DisplayContext for VerifyDisplayContext {}
+
 /// Processes display messages for the verify operation.
 ///
 /// Formats messages based on verbosity levels and message types.
@@ -349,32 +356,33 @@ fn pinned_task_processor(
 ///
 /// * `message` - The display message to process
 /// * `verbosity` - The verbosity level (higher values show more details)
-///
-/// # Returns
-///
-/// An optional string to display, or None if the message should be skipped
 fn display_message_processor(
-    message: DisplayMessage<VerifyTaskResult, VerifyTaskError, VerifyTaskCounters>,
+    message: DisplayMessage<
+        VerifyTaskResult,
+        VerifyTaskError,
+        VerifyTaskCounters,
+        VerifyDisplayContext,
+    >,
     verbosity: u8,
-) -> Option<String> {
+) -> Vec<String> {
     match message {
-        DisplayMessage::Start(manifest_source) => Some(format!(
+        DisplayMessage::Start(manifest_source, _context) => vec![format!(
             "Verifying {} ({})",
             manifest_source.filepath.display(),
             manifest_source.format
-        )),
+        )],
         DisplayMessage::Result(result) => {
             if match result.status {
                 VerifyTaskStatus::Invalid => true,
                 VerifyTaskStatus::Missing => verbosity >= 1,
                 VerifyTaskStatus::Valid => verbosity >= 2,
             } {
-                return Some(format!("{}", result));
+                return vec![format!("{}", result)];
             }
 
-            None
+            vec![]
         }
-        DisplayMessage::Error(error) => Some(format!("{}", error)),
+        DisplayMessage::Error(error) => vec![format!("{}", error)],
         DisplayMessage::Progress {
             counters,
             current,
@@ -403,9 +411,9 @@ fn display_message_processor(
                 parts.push(format!("[{}/{}]", current, total).dimmed().to_string());
             }
 
-            Some(parts.join(" "))
+            vec![parts.join(" ")]
         }
-        DisplayMessage::Exit => None,
+        DisplayMessage::Exit => vec![],
     }
 }
 
@@ -471,7 +479,10 @@ pub async fn verify(options: VerifyOptions) -> Result<(), VerifyError> {
         display_manager = display_manager.with_progress(10);
     }
 
-    display_manager.start(manifest_source).await?;
+    let display_context = VerifyDisplayContext {};
+    display_manager
+        .start(manifest_source, display_context)
+        .await?;
 
     for (filename, expected) in &manifest.artifacts {
         task_manager
