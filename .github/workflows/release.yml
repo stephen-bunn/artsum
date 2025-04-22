@@ -25,4 +25,5 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           RUSTTARGET: ${{ matrix.target }}
+          TOOLCHAIN_VERSION: 1.86.0
           EXTRA_FILES: "README.md LICENSE"
