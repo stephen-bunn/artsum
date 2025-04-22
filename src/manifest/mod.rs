@@ -1,6 +1,6 @@
+pub mod artsum;
 pub mod b2sum;
 pub mod md5sum;
-pub mod sfv;
 pub mod sha1sum;
 pub mod sha256sum;
 pub mod sha512sum;
@@ -43,7 +43,7 @@ pub enum ManifestError {
 )]
 #[strum(serialize_all = "lowercase")]
 pub enum ManifestFormat {
-    SFV,
+    ARTSUM,
     MD5SUM,
     SHA1SUM,
     SHA256SUM,
@@ -53,7 +53,7 @@ pub enum ManifestFormat {
 
 impl Default for ManifestFormat {
     fn default() -> Self {
-        ManifestFormat::SFV
+        ManifestFormat::ARTSUM
     }
 }
 
@@ -61,7 +61,7 @@ impl ManifestFormat {
     /// Get the parser for the manifest format.
     pub fn parser(&self) -> Box<dyn ManifestParser> {
         match self {
-            ManifestFormat::SFV => Box::new(sfv::SFVParser::default()),
+            ManifestFormat::ARTSUM => Box::new(artsum::ARTSUMParser::default()),
             ManifestFormat::MD5SUM => Box::new(md5sum::MD5SUMParser::default()),
             ManifestFormat::SHA1SUM => Box::new(sha1sum::SHA1SUMParser::default()),
             ManifestFormat::SHA256SUM => Box::new(sha256sum::SHA256SUMParser::default()),

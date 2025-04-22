@@ -53,7 +53,7 @@ pub struct GenerateOptions {
 
     /// Optional format for the manifest
     ///
-    /// If not provided, defaults to SFV format.
+    /// If not provided, defaults to Artsum format.
     pub format: Option<ManifestFormat>,
 
     /// Optional checksum mode to use

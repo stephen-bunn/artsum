@@ -98,6 +98,38 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e16d2d3311acee920a9eb8d33b8cbc1787ce4a264e85f964c2404b969bdcd487"
 
 [[package]]
+name = "artsum"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "blake2",
+ "chrono",
+ "clap",
+ "colored",
+ "crc32fast",
+ "fake",
+ "glob",
+ "hex",
+ "log",
+ "md5",
+ "pathdiff",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "simplelog",
+ "strum",
+ "strum_macros",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "toml",
+ "xxhash-rust",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.88"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -824,38 +856,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "87607cb1398ed59d48732e575a4c28a7a8ebf2454b964fe3f224f2afc07909e1"
 dependencies = [
  "serde",
-]
-
-[[package]]
-name = "sfv-rs"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "blake2",
- "chrono",
- "clap",
- "colored",
- "crc32fast",
- "fake",
- "glob",
- "hex",
- "log",
- "md5",
- "pathdiff",
- "regex",
- "serde",
- "serde_json",
- "sha1",
- "sha2",
- "simplelog",
- "strum",
- "strum_macros",
- "tempfile",
- "thiserror",
- "tokio",
- "toml",
- "xxhash-rust",
 ]
 
 [[package]]

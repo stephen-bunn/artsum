@@ -7,22 +7,22 @@ use toml;
 use super::{Manifest, ManifestError, ManifestParser, ManifestSource};
 use crate::checksum::ChecksumAlgorithm;
 
-pub const DEFAULT_MANIFEST_FILENAME: &str = "sfv.toml";
+pub const DEFAULT_MANIFEST_FILENAME: &str = "artsum.toml";
 
-pub struct SFVParser {
+pub struct ARTSUMParser {
     filename_patterns: Vec<Regex>,
 }
 
-impl Default for SFVParser {
+impl Default for ARTSUMParser {
     fn default() -> Self {
-        SFVParser {
-            filename_patterns: vec![Regex::new(r"^sfv\.toml$").unwrap()],
+        ARTSUMParser {
+            filename_patterns: vec![Regex::new(r"^artsum\.toml$").unwrap()],
         }
     }
 }
 
 #[async_trait]
-impl ManifestParser for SFVParser {
+impl ManifestParser for ARTSUMParser {
     fn filename_patterns(&self) -> &[Regex] {
         &self.filename_patterns
     }

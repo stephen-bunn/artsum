@@ -4,7 +4,7 @@ use regex::Regex;
 use super::{gnu_from_str, gnu_to_string, Manifest, ManifestError, ManifestParser, ManifestSource};
 use crate::checksum::ChecksumAlgorithm;
 
-pub const DEFAULT_MANIFEST_FILENAME: &str = "sfv.md5";
+pub const DEFAULT_MANIFEST_FILENAME: &str = "artsum.md5";
 
 pub struct MD5SUMParser {
     filename_patterns: Vec<Regex>,
@@ -14,7 +14,7 @@ impl Default for MD5SUMParser {
     fn default() -> Self {
         MD5SUMParser {
             filename_patterns: vec![
-                Regex::new(r"^sfv\.md5$").unwrap(),
+                Regex::new(r"^artsum\.md5$").unwrap(),
                 Regex::new(r"^.*\.md5$").unwrap(),
             ],
         }

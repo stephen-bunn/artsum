@@ -1,4 +1,4 @@
-# sfv-rs
+# artsum
 
 Personal manifest checksum generation / verification utility.
 
@@ -11,71 +11,71 @@ https://github.com/user-attachments/assets/53f4519d-2c61-4c75-a9c5-6c1421596670
 
 ```bash
 # Simple usage, defaults to sfv.toml output
-sfv-rs generate .
+artsum generate .
 
 # Control over the output manifest file is supported
-sfv-rs generate -o mymanifest.toml .
+artsum generate -o mymanifest.toml .
 
 # If a specific checksum algorithm makes the most sense for a directory, I can specify the algorithm
-sfv-rs generate -a sha256 .
+artsum generate -a sha256 .
 
 # Standard GNU formats such as md5sum can also be used
-sfv-rs generate -f md5sum .
+artsum generate -f md5sum .
 
 # Checksum modes are supported, binary mode is always the default
 # You will likely run into errors if you attempt to generate text checksums in directories that contain files not using only UTF-8
-sfv-rs generate -m text .
+artsum generate -m text .
 
 # Control over the checksum chunk size is supported
-sfv-rs generate -c 1024 .
+artsum generate -c 1024 .
 
 # Control over the number of checksum workers is supported
-sfv-rs generate -x 1 .
+artsum generate -x 1 .
 
 # Verbose logging is supported on the root command
 # -v or -vv will output all generated manifest checksums
-sfv-rs -v generate .
+artsum -v generate .
 ```
 
 ## Manifest Verification
 
 ```bash
 # If I'm currently in a directory with a manifest file, I can verify the manifest
-sfv-rs
+artsum
 
 # If I'm not in a directory with a manifest file, I can target the directory with the manifest
-sfv-rs verify -m [MANIFEST_FILEPATH] .
+artsum verify -m [MANIFEST_FILEPATH] .
 
 # Control over the checksum chunk size is supported
-sfv-rs verify -c 1024 .
+artsum verify -c 1024 .
 
 # Control over the number of checksum workers is supported
-sfv-rs verify -x 1 .
+artsum verify -x 1 .
 
 # Verbose logging is supported on the root command
 # No verbose flag will always output verification failures
 # -v will output warnings (such as missing files)
 # -vv will output all verification results (including all successful verifications)
-sfv-rs -vv
+artsum -vv
 ```
 
 ## Refresh a Manifest
 
 ```bash
 # If I'm currently in a directory with a manifest file, I can refresh the manifest's checksums
-sfv-rs refresh .
+artsum refresh .
 
 # If I'm not in a directory with a manifest file, I can target the directory with the manifest
-sfv-rs refresh -m [MANIFEST_FILEPATH] .
+artsum refresh -m [MANIFEST_FILEPATH] .
 
 # Control over the checksum chunk size is supported
-sfv-rs refresh -c 1024 .
+artsum refresh -c 1024 .
 
 # Control over the number of checksum workers is supported
-sfv-rs refresh -x 1 .
+artsum refresh -x 1 .
 
 # Verbose logging is supported on the root command
 # No verbose flag will always output updated or removed artifacts
 # -v will output unchanged files
-sfv-rs -v refresh .
+artsum -v refresh .
 ```

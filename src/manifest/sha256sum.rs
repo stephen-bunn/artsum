@@ -4,7 +4,7 @@ use regex::Regex;
 use super::{gnu_from_str, gnu_to_string, Manifest, ManifestError, ManifestParser, ManifestSource};
 use crate::checksum::ChecksumAlgorithm;
 
-pub const DEFAULT_MANIFEST_FILENAME: &str = "sfv.sha256";
+pub const DEFAULT_MANIFEST_FILENAME: &str = "artsum.sha256";
 
 pub struct SHA256SUMParser {
     filename_patterns: Vec<Regex>,
@@ -14,7 +14,7 @@ impl Default for SHA256SUMParser {
     fn default() -> Self {
         SHA256SUMParser {
             filename_patterns: vec![
-                Regex::new(r"^sfv\.sha256$").unwrap(),
+                Regex::new(r"^artsum\.sha256$").unwrap(),
                 Regex::new(r"^.*\.sha256$").unwrap(),
             ],
         }

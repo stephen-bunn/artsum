@@ -4,7 +4,7 @@ use regex::Regex;
 use super::{gnu_from_str, gnu_to_string, Manifest, ManifestError, ManifestParser, ManifestSource};
 use crate::checksum::ChecksumAlgorithm;
 
-pub const DEFAULT_MANIFEST_FILENAME: &str = "sfv.b2sum";
+pub const DEFAULT_MANIFEST_FILENAME: &str = "artsum.b2sum";
 
 pub struct B2SUMParser {
     filename_patterns: Vec<Regex>,
@@ -14,7 +14,7 @@ impl Default for B2SUMParser {
     fn default() -> Self {
         B2SUMParser {
             filename_patterns: vec![
-                Regex::new(r"^sfv\.b2sum$").unwrap(),
+                Regex::new(r"^artsum\.b2sum$").unwrap(),
                 Regex::new(r"^.*\.b2sum$").unwrap(),
             ],
         }

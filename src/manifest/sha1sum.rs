@@ -4,7 +4,7 @@ use regex::Regex;
 use super::{gnu_from_str, gnu_to_string, Manifest, ManifestError, ManifestParser, ManifestSource};
 use crate::checksum::ChecksumAlgorithm;
 
-pub const DEFAULT_MANIFEST_FILENAME: &str = "sfv.sha1";
+pub const DEFAULT_MANIFEST_FILENAME: &str = "artsum.sha1";
 
 pub struct SHA1SUMParser {
     filename_patterns: Vec<Regex>,
@@ -14,7 +14,7 @@ impl Default for SHA1SUMParser {
     fn default() -> Self {
         SHA1SUMParser {
             filename_patterns: vec![
-                Regex::new(r"^sfv\.sha1$").unwrap(),
+                Regex::new(r"^artsum\.sha1$").unwrap(),
                 Regex::new(r"^.*\.sha1$").unwrap(),
             ],
         }

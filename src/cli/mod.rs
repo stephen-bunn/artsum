@@ -56,7 +56,7 @@ The manifest file will contain the checksums of all files in the directory and i
         /// Algorithm to use for checksum calculation
         algorithm: Option<ChecksumAlgorithm>,
         /// Format of the manifest file
-        #[arg(short, long, default_value = "sfv")]
+        #[arg(short, long, default_value = "artsum")]
         format: Option<ManifestFormat>,
         #[arg(short, long, default_value = "binary")]
         /// Checksum mode to use for generating checksums
@@ -132,7 +132,10 @@ pub async fn cli() -> anyhow::Result<()> {
             vec![simplelog::WriteLogger::new(
                 simplelog::LevelFilter::Debug,
                 simplelog::Config::default(),
-                std::fs::File::create(format!("{}_sfv.log", chrono::Local::now().format("%FT%T")))?,
+                std::fs::File::create(format!(
+                    "{}_artsum.log",
+                    chrono::Local::now().format("%FT%T")
+                ))?,
             )];
 
         if !args.no_display {
