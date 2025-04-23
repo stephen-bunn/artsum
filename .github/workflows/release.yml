@@ -38,5 +38,6 @@ jobs:
       - name: Publish artifacts
         uses: houseabsolute/actions-rust-release@v0
         with:
-          executable-name: ubi
+          executable-name: arthaus
+          changes-file: CHANGELOG.md
           target: ${{ matrix.platform.target }}
