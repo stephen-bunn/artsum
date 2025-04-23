@@ -5,6 +5,7 @@ repository = "https://github.com/stephen-bunn/artsum"
 version = "0.1.1"
 edition = "2021"
 readme = "README.md"
+license = "MIT"
 license-file = "LICENSE"
 keywords = ["command-line", "checksum", "manifest"]
 categories = ["command-line-utilities"]
