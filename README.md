@@ -8,7 +8,7 @@ I use this to generate a manifest at a point in time for a directory and then ru
 ## Manifest Generation
 
 ```bash
-# Simple usage, defaults to sfv.toml output
+# Simple usage, defaults to artsum.toml output
 artsum generate .
 
 # Control over the output manifest file is supported
