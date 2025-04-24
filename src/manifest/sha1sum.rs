@@ -1,7 +1,9 @@
 use async_trait::async_trait;
 use regex::Regex;
 
-use super::{gnu_from_str, gnu_to_string, Manifest, ManifestError, ManifestParser, ManifestSource};
+use super::{
+    standard_from_str, standard_to_string, Manifest, ManifestError, ManifestParser, ManifestSource,
+};
 use crate::checksum::ChecksumAlgorithm;
 
 pub const DEFAULT_MANIFEST_FILENAME: &str = "artsum.sha1";
@@ -41,10 +43,10 @@ impl ManifestParser for SHA1SUMParser {
     }
 
     async fn from_str(&self, data: &str) -> Result<Manifest, ManifestError> {
-        gnu_from_str(data, self.algorithm().unwrap()).await
+        standard_from_str(data, self.algorithm().unwrap()).await
     }
 
     async fn to_string(&self, manifest: &Manifest) -> Result<String, ManifestError> {
-        gnu_to_string(manifest).await
+        standard_to_string(manifest).await
     }
 }

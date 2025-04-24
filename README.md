@@ -17,7 +17,7 @@ artsum generate -o mymanifest.toml .
 # If a specific checksum algorithm makes the most sense for a directory, I can specify the algorithm
 artsum generate -a sha256 .
 
-# Standard GNU formats such as md5sum can also be used
+# Standard formats such as md5sum can also be used
 artsum generate -f md5sum .
 
 # Checksum modes are supported, binary mode is always the default

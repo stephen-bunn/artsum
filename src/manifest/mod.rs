@@ -219,8 +219,11 @@ pub trait ManifestParser {
     async fn to_string(&self, manifest: &Manifest) -> Result<String, ManifestError>;
 }
 
-/// The GNU implementation of parsing checksum / filename pairs.
-async fn gnu_from_str(data: &str, algorithm: ChecksumAlgorithm) -> Result<Manifest, ManifestError> {
+/// The standard implementation of parsing checksum / filename pairs.
+async fn standard_from_str(
+    data: &str,
+    algorithm: ChecksumAlgorithm,
+) -> Result<Manifest, ManifestError> {
     // Parse out the artifacts from a standard md5sum file structure
     let mut artifacts = HashMap::new();
 
@@ -257,8 +260,8 @@ async fn gnu_from_str(data: &str, algorithm: ChecksumAlgorithm) -> Result<Manife
     })
 }
 
-/// The GNU implementation of converting a manifest to checksum / filename pairs.
-pub async fn gnu_to_string(manifest: &Manifest) -> Result<String, ManifestError> {
+/// The standard implementation of converting a manifest to checksum / filename pairs.
+pub async fn standard_to_string(manifest: &Manifest) -> Result<String, ManifestError> {
     let mut lines = Vec::with_capacity(manifest.artifacts.len());
     for (path, checksum) in manifest.artifacts.iter() {
         if checksum.mode == ChecksumMode::Text {
