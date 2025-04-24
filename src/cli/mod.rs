@@ -15,6 +15,7 @@ use crate::{
 };
 
 #[derive(Debug, clap::Parser)]
+#[clap(version = env!("CARGO_PKG_VERSION"))]
 pub struct Cli {
     #[clap(subcommand)]
     pub command: Option<Commands>,
