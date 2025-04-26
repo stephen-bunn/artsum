@@ -1,3 +1,5 @@
 /target
 /artsum.*
 /*.log
+
+coverage/

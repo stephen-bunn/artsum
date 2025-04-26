@@ -154,12 +154,10 @@ pub trait ManifestParser {
         }
 
         if let Ok(entries) = glob::glob(dirpath.join("*").to_str().unwrap()) {
-            for entry in entries {
-                if let Ok(path) = entry {
-                    debug!("Checking if parser can handle file as manifest: {:?}", path);
-                    if self.can_handle_filepath(&path) {
-                        return Some(path);
-                    }
+            for path in entries.flatten() {
+                debug!("Checking if parser can handle file as manifest: {:?}", path);
+                if self.can_handle_filepath(&path) {
+                    return Some(path);
                 }
             }
         }
@@ -194,7 +192,7 @@ pub trait ManifestParser {
                     }
                 }
 
-                return false;
+                false
             }
             None => false,
         }
@@ -233,7 +231,7 @@ async fn standard_from_str(
             continue;
         }
 
-        let parts = line.trim().split_whitespace().collect::<Vec<&str>>();
+        let parts = line.split_whitespace().collect::<Vec<&str>>();
         if parts.len() != 2 {
             continue;
         }

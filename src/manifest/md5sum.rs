@@ -60,11 +60,14 @@ mod tests {
     use std::{
         collections::HashMap,
         ffi::OsStr,
+        io::Write,
         path::{Path, PathBuf},
     };
+    use tempfile::NamedTempFile;
 
     use super::*;
     use crate::checksum::{Checksum, ChecksumMode};
+    use crate::manifest::ManifestFormat;
 
     fn get_parser() -> MD5SUMParser {
         MD5SUMParser::default()
@@ -101,6 +104,39 @@ mod tests {
             filepath.set_extension(&OsStr::new(ext.as_str()));
             prop_assert!(!MD5SUMParser::default().can_handle_filepath(filepath.as_path()));
         }
+    }
+
+    #[tokio::test]
+    async fn test_parse_reads_standard_format_binary() {
+        let parser = get_parser();
+        let filename: String = FilePath().fake();
+        let checksum = Checksum {
+            algorithm: parser.algorithm().unwrap(),
+            digest: Faker.fake(),
+            mode: ChecksumMode::Binary,
+        };
+
+        let expected = Manifest {
+            version: None,
+            artifacts: HashMap::from([(filename.clone(), checksum.clone())]),
+        };
+
+        let mut test_file = NamedTempFile::new().expect("Failed to create temp file");
+        test_file
+            .write(format!("{} {}", checksum.digest, filename).as_bytes())
+            .expect("Failed to write to temp file");
+        test_file.flush().expect("Failed to flush temp file");
+
+        let actual = parser
+            .parse(&ManifestSource {
+                filepath: test_file.path().to_path_buf(),
+                format: ManifestFormat::MD5SUM,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(actual.version, expected.version);
+        assert_eq!(actual.artifacts, expected.artifacts);
     }
 
     #[tokio::test]
