@@ -18,6 +18,7 @@ impl Default for B2SUMParser {
             filename_patterns: vec![
                 Regex::new(r"^artsum\.b2sum$").unwrap(),
                 Regex::new(r"^.*\.b2sum$").unwrap(),
+                Regex::new(r"^.*\.b2$").unwrap(),
             ],
         }
     }

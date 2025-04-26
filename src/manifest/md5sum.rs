@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+
 use regex::Regex;
 
 use super::{
@@ -18,6 +19,7 @@ impl Default for MD5SUMParser {
             filename_patterns: vec![
                 Regex::new(r"^artsum\.md5$").unwrap(),
                 Regex::new(r"^.*\.md5$").unwrap(),
+                Regex::new(r"^.*\.md5sum$").unwrap(),
             ],
         }
     }
@@ -53,52 +55,19 @@ impl ManifestParser for MD5SUMParser {
 
 #[cfg(test)]
 mod tests {
-    const SAMPLE_COUNT: usize = 20;
-
-    use super::*;
-    use crate::checksum::{Checksum, ChecksumMode};
     use fake::{faker::filesystem::en::*, Fake, Faker};
+    use proptest::prelude::*;
     use std::{
         collections::HashMap,
         ffi::OsStr,
         path::{Path, PathBuf},
     };
 
+    use super::*;
+    use crate::checksum::{Checksum, ChecksumMode};
+
     fn get_parser() -> MD5SUMParser {
         MD5SUMParser::default()
-    }
-
-    #[test]
-    fn test_can_handle_filepath_default() {
-        assert!(get_parser().can_handle_filepath(&Path::new(DEFAULT_MANIFEST_FILENAME)));
-    }
-
-    #[test]
-    fn test_can_handle_filepath_md5_extension() {
-        for mut path in fake::vec![PathBuf as FilePath(); SAMPLE_COUNT] {
-            if path.file_name().is_none() {
-                path.set_file_name(&OsStr::new(FileName().fake::<String>().as_str()));
-            }
-
-            path.set_extension("md5");
-            assert!(get_parser().can_handle_filepath(&path));
-        }
-    }
-
-    #[test]
-    fn test_can_handle_filepath_unsupported_extension() {
-        for mut path in fake::vec![PathBuf as FilePath(); SAMPLE_COUNT] {
-            if path.file_name().is_none() {
-                path.set_file_name(&OsStr::new(FileName().fake::<String>().as_str()));
-            }
-
-            if let Some(ext) = path.extension() {
-                if ext != "md5" {
-                    path.set_extension(&OsStr::new(FileExtension().fake::<String>().as_str()));
-                }
-            }
-            assert!(!get_parser().can_handle_filepath(&path));
-        }
     }
 
     #[test]
@@ -109,6 +78,29 @@ mod tests {
     #[test]
     fn test_algorithm() {
         assert_eq!(get_parser().algorithm(), Some(ChecksumAlgorithm::MD5));
+    }
+
+    #[test]
+    fn test_can_handle_filepath_default() {
+        assert!(get_parser().can_handle_filepath(&Path::new(DEFAULT_MANIFEST_FILENAME)));
+    }
+
+    proptest! {
+        #[test]
+        fn test_can_handle_filepath_extension(ext in "md5(sum)?") {
+            let mut filepath = PathBuf::from(FileName().fake::<String>());
+            filepath.set_extension(&OsStr::new(ext.as_str()));
+            prop_assert!(MD5SUMParser::default().can_handle_filepath(filepath.as_path()));
+        }
+
+        #[test]
+        fn test_can_handle_filepath_unsupported_extension(ext in "[a-zA-Z0-9]{1,4}") {
+            prop_assume!(ext != ".md5" && ext != ".md5sum");
+
+            let mut filepath = PathBuf::from(FileName().fake::<String>());
+            filepath.set_extension(&OsStr::new(ext.as_str()));
+            prop_assert!(!MD5SUMParser::default().can_handle_filepath(filepath.as_path()));
+        }
     }
 
     #[tokio::test]

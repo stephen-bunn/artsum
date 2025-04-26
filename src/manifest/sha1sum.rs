@@ -18,6 +18,7 @@ impl Default for SHA1SUMParser {
             filename_patterns: vec![
                 Regex::new(r"^artsum\.sha1$").unwrap(),
                 Regex::new(r"^.*\.sha1$").unwrap(),
+                Regex::new(r"^.*\.sha1sum$").unwrap(),
             ],
         }
     }
