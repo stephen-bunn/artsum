@@ -2,13 +2,13 @@
 name = "artsum"
 description = "A simple command-line tool for generating and verifying a directory manifest of checksums"
 repository = "https://github.com/stephen-bunn/artsum"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 readme = "README.md"
 license = "MIT"
 keywords = ["command-line", "checksum", "manifest"]
 categories = ["command-line-utilities"]
-exclude = [".github", ".gitignore", "cliff.toml"]
+exclude = [".github", ".gitignore", ".justfile", "cliff.toml"]
 
 [dependencies]
 anyhow = "1.0.93"
