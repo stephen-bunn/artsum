@@ -155,8 +155,8 @@ impl Display for VerifyTaskResult {
                     format!("{} {}", self.status, self.filename).bold().red(),
                     format!(
                         "({} != {})",
-                        format!("{}", self.actual.as_ref().unwrap()).red(),
-                        format!("{}", self.expected)
+                        self.actual.as_ref().unwrap().to_string().red(),
+                        self.expected
                     )
                     .dimmed()
                 )
@@ -284,8 +284,8 @@ async fn task_processor(
 
     let actual = Checksum::from_file(ChecksumOptions {
         filepath,
-        algorithm: expected.algorithm.clone(),
-        mode: expected.mode.clone(),
+        algorithm: expected.algorithm,
+        mode: expected.mode,
         chunk_size: Some(options.chunk_size),
         progress_callback: None,
     })
@@ -496,9 +496,7 @@ pub async fn verify(options: VerifyOptions) -> Result<(), VerifyError> {
     }
 
     for task in task_manager.tasks {
-        let task_result = task
-            .await
-            .or_else(|err| Err(VerifyError::TaskJoinFailure(err)))?;
+        let task_result = task.await.map_err(VerifyError::TaskJoinFailure)?;
         match task_result {
             Ok(result) => display_manager.report_result(result).await?,
             Err(error) => display_manager.report_error(error).await?,

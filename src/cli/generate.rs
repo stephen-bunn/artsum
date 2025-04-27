@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     cmp::max,
     collections::HashMap,
     fmt::Display,
@@ -345,7 +344,7 @@ fn display_message_processor(
                 .to_string(),
             );
 
-            return lines;
+            lines
         }
         DisplayMessage::Result(result) => {
             if verbosity >= 1 {
@@ -414,7 +413,7 @@ pub async fn generate(options: GenerateOptions) -> Result<(), GenerateError> {
     let checksum_algorithm = manifest_parser
         .algorithm()
         .unwrap_or_else(|| options.algorithm.unwrap_or_default());
-    let checksum_mode = options.mode.unwrap_or(ChecksumMode::default());
+    let checksum_mode = options.mode.unwrap_or_default();
     let checksum_chunk_size = options.chunk_size;
 
     if let Some(algorithm) = options.algorithm {
@@ -465,52 +464,43 @@ pub async fn generate(options: GenerateOptions) -> Result<(), GenerateError> {
 
     let glob_pattern =
         manifest_dirpath.join(options.glob.unwrap_or(String::from(DEFAULT_GLOB_PATTERN)));
-    for entry in glob::glob_with(
+    for path in (glob::glob_with(
         glob_pattern.to_str().unwrap_or(DEFAULT_GLOB_PATTERN),
         glob::MatchOptions {
             case_sensitive: false,
             require_literal_separator: false,
             require_literal_leading_dot: false,
         },
-    )? {
-        if let Ok(path) = entry {
-            if !path.exists() || path.is_dir() || path.is_symlink() {
-                debug!("Skipping path {:?}", path);
-                continue;
-            }
+    )?)
+    .flatten()
+    {
+        if !path.exists() || path.is_dir() || path.is_symlink() {
+            debug!("Skipping path {:?}", path);
+            continue;
+        }
 
-            let canonical_path = path.canonicalize()?;
-            if canonical_path == manifest_filepath {
-                debug!("Skipping manifest file {:?}", path);
-                continue;
-            }
+        let canonical_path = path.canonicalize()?;
+        if canonical_path == manifest_filepath {
+            debug!("Skipping manifest file {:?}", path);
+            continue;
+        }
 
-            let canonical_path_string = canonical_path.to_string_lossy();
-            if !exclude_patterns.is_empty()
-                && exclude_patterns
-                    .iter()
-                    .any(|p| p.is_match(&canonical_path_string))
+        let canonical_path_string = canonical_path.to_string_lossy();
+        if !exclude_patterns.is_empty()
+            && exclude_patterns
+                .iter()
+                .any(|p| p.is_match(&canonical_path_string))
+        {
+            debug!("Excluding checksum generation for {:?}", path);
+            continue;
+        }
+
+        if !include_patterns.is_empty() {
+            if include_patterns
+                .iter()
+                .any(|p| p.is_match(&canonical_path_string))
             {
-                debug!("Excluding checksum generation for {:?}", path);
-                continue;
-            }
-
-            if include_patterns.len() > 0 {
-                if include_patterns
-                    .iter()
-                    .any(|p| p.is_match(&canonical_path_string))
-                {
-                    debug!("Including checksum generation for {:?}", path);
-                    task_manager
-                        .spawn(GenerateTaskOptions {
-                            filepath: canonical_path,
-                            algorithm: checksum_algorithm,
-                            mode: checksum_mode,
-                            chunk_size: checksum_chunk_size,
-                        })
-                        .await;
-                }
-            } else {
+                debug!("Including checksum generation for {:?}", path);
                 task_manager
                     .spawn(GenerateTaskOptions {
                         filepath: canonical_path,
@@ -520,6 +510,15 @@ pub async fn generate(options: GenerateOptions) -> Result<(), GenerateError> {
                     })
                     .await;
             }
+        } else {
+            task_manager
+                .spawn(GenerateTaskOptions {
+                    filepath: canonical_path,
+                    algorithm: checksum_algorithm,
+                    mode: checksum_mode,
+                    chunk_size: checksum_chunk_size,
+                })
+                .await;
         }
     }
 
@@ -532,10 +531,7 @@ pub async fn generate(options: GenerateOptions) -> Result<(), GenerateError> {
                 if let Some(relative_filepath) =
                     pathdiff::diff_paths(&result.filename, &manifest_dirpath)
                 {
-                    artifacts.insert(
-                        Cow::from(relative_filepath.to_string_lossy()).into_owned(),
-                        checksum,
-                    );
+                    artifacts.insert(relative_filepath.to_string_lossy().into_owned(), checksum);
                     display_manager.report_result(result).await?;
                 }
             }

@@ -40,11 +40,11 @@ impl ManifestParser for MD5SUMParser {
     }
 
     async fn parse(&self, source: &ManifestSource) -> Result<Manifest, ManifestError> {
-        self.from_str(tokio::fs::read_to_string(&source.filepath).await?.as_str())
+        self.parse_str(tokio::fs::read_to_string(&source.filepath).await?.as_str())
             .await
     }
 
-    async fn from_str(&self, data: &str) -> Result<Manifest, ManifestError> {
+    async fn parse_str(&self, data: &str) -> Result<Manifest, ManifestError> {
         standard_from_str(data, self.algorithm().unwrap()).await
     }
 
@@ -154,7 +154,7 @@ mod tests {
             artifacts: HashMap::from([(filename.clone(), checksum.clone())]),
         };
         let actual = parser
-            .from_str(format!("{} {}", checksum.digest, filename).as_str())
+            .parse_str(format!("{} {}", checksum.digest, filename).as_str())
             .await
             .unwrap();
         assert_eq!(actual.version, expected.version);
@@ -175,7 +175,7 @@ mod tests {
             artifacts: HashMap::from([(filename.clone(), checksum.clone())]),
         };
         let actual = parser
-            .from_str(format!("{}  {}", checksum.digest, filename).as_str())
+            .parse_str(format!("{}  {}", checksum.digest, filename).as_str())
             .await
             .unwrap();
         assert_eq!(actual.version, expected.version);

@@ -132,9 +132,7 @@ impl Default for ChecksumAlgorithm {
 impl ChecksumAlgorithm {
     /// Calculates the checksum of a file using the current algorithm.
     pub async fn checksum_file(&self, options: &ChecksumOptions) -> Result<Vec<u8>, ChecksumError> {
-        checksum_file(&options)
-            .await
-            .map_err(ChecksumError::IoError)
+        checksum_file(options).await.map_err(ChecksumError::IoError)
     }
 }
 

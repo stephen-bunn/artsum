@@ -36,11 +36,11 @@ impl ManifestParser for ARTSUMParser {
     }
 
     async fn parse(&self, source: &ManifestSource) -> Result<Manifest, ManifestError> {
-        self.from_str(tokio::fs::read_to_string(&source.filepath).await?.as_str())
+        self.parse_str(tokio::fs::read_to_string(&source.filepath).await?.as_str())
             .await
     }
 
-    async fn from_str(&self, data: &str) -> Result<Manifest, ManifestError> {
+    async fn parse_str(&self, data: &str) -> Result<Manifest, ManifestError> {
         toml::from_str(data).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err).into())
     }
 

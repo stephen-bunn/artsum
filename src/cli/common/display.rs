@@ -343,13 +343,13 @@ async fn display_message_consumer<
         clear_progress(&mut progress_visible);
         if matches!(message, DisplayMessage::Progress { .. }) {
             let messages = message_processor(message, verbosity);
-            if messages.len() == 0 {
+            if messages.is_empty() {
                 continue;
             } else if messages.len() > 1 {
                 warn!("Received multiple lines for progress message, only the first line will be displayed");
             }
 
-            if let Some(first_message) = messages.get(0) {
+            if let Some(first_message) = messages.first() {
                 print!("{}", first_message);
                 progress_visible = true;
             }

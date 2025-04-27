@@ -1,4 +1,4 @@
-use std::{future::Future, pin::Pin, sync::Arc};
+use std::{cmp::Ordering, future::Future, pin::Pin, sync::Arc};
 
 /// Common error types for task management operations.
 #[derive(Debug, thiserror::Error)]
@@ -109,12 +109,16 @@ impl<TResult: TaskResult, TError: TaskError, TCounters: TaskCounters, TOptions: 
         }
 
         let available_permits = self.worker_semaphore.available_permits();
-        if max_workers > available_permits {
-            self.worker_semaphore
-                .add_permits(max_workers - available_permits);
-        } else if max_workers < available_permits {
-            self.worker_semaphore
-                .forget_permits(available_permits - max_workers);
+        match max_workers.cmp(&available_permits) {
+            Ordering::Greater => {
+                self.worker_semaphore
+                    .add_permits(max_workers - available_permits);
+            }
+            Ordering::Less => {
+                self.worker_semaphore
+                    .forget_permits(available_permits - max_workers);
+            }
+            Ordering::Equal => {}
         }
 
         self
@@ -144,7 +148,7 @@ impl<TResult: TaskResult, TError: TaskError, TCounters: TaskCounters, TOptions: 
             let permit = worker_semaphore
                 .acquire()
                 .await
-                .map_err(|e| TaskManagerError::TaskPermitFailure(e));
+                .map_err(TaskManagerError::TaskPermitFailure);
 
             let result = task_processor(options, counters).await;
 

@@ -31,6 +31,7 @@ pub enum ManifestError {
 
 /// The format of a manifest file.
 #[derive(
+    Default,
     Clone,
     Copy,
     Debug,
@@ -43,18 +44,13 @@ pub enum ManifestError {
 )]
 #[strum(serialize_all = "lowercase")]
 pub enum ManifestFormat {
+    #[default]
     ARTSUM,
     MD5SUM,
     SHA1SUM,
     SHA256SUM,
     SHA512SUM,
     B2SUM,
-}
-
-impl Default for ManifestFormat {
-    fn default() -> Self {
-        ManifestFormat::ARTSUM
-    }
 }
 
 impl ManifestFormat {
@@ -211,7 +207,7 @@ pub trait ManifestParser {
     async fn parse(&self, source: &ManifestSource) -> Result<Manifest, ManifestError>;
 
     /// Parse a manifest from a str.
-    async fn from_str(&self, data: &str) -> Result<Manifest, ManifestError>;
+    async fn parse_str(&self, data: &str) -> Result<Manifest, ManifestError>;
 
     /// Convert a manifest to a string.
     async fn to_string(&self, manifest: &Manifest) -> Result<String, ManifestError>;
