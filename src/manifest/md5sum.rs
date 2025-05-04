@@ -55,10 +55,9 @@ impl ManifestParser for MD5SUMParser {
 
 #[cfg(test)]
 mod tests {
-    use fake::{faker::filesystem::en::*, Fake, Faker};
+    use fake::{faker::filesystem::en::*, Fake};
     use proptest::prelude::*;
     use std::{
-        collections::HashMap,
         ffi::OsStr,
         io::Write,
         path::{Path, PathBuf},
@@ -66,38 +65,40 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use super::*;
-    use crate::checksum::{Checksum, ChecksumMode};
-    use crate::manifest::ManifestFormat;
+    use crate::checksum::ChecksumMode;
+    use crate::manifest::{utils::fake_manifest, ManifestFormat};
 
-    fn get_parser() -> MD5SUMParser {
-        MD5SUMParser::default()
+    #[test]
+    fn default_filename() {
+        assert_eq!(
+            MD5SUMParser::default().default_filename(),
+            DEFAULT_MANIFEST_FILENAME
+        );
     }
 
     #[test]
-    fn test_default_filename() {
-        assert_eq!(get_parser().default_filename(), DEFAULT_MANIFEST_FILENAME);
+    fn algorithm() {
+        assert_eq!(
+            MD5SUMParser::default().algorithm(),
+            Some(ChecksumAlgorithm::MD5)
+        );
     }
 
     #[test]
-    fn test_algorithm() {
-        assert_eq!(get_parser().algorithm(), Some(ChecksumAlgorithm::MD5));
-    }
-
-    #[test]
-    fn test_can_handle_filepath_default() {
-        assert!(get_parser().can_handle_filepath(&Path::new(DEFAULT_MANIFEST_FILENAME)));
+    fn can_handle_filepath_default() {
+        assert!(MD5SUMParser::default().can_handle_filepath(&Path::new(DEFAULT_MANIFEST_FILENAME)));
     }
 
     proptest! {
         #[test]
-        fn test_can_handle_filepath_extension(ext in "md5(sum)?") {
+        fn can_handle_filepath_extension(ext in "md5(sum)?") {
             let mut filepath = PathBuf::from(FileName().fake::<String>());
             filepath.set_extension(&OsStr::new(ext.as_str()));
             prop_assert!(MD5SUMParser::default().can_handle_filepath(filepath.as_path()));
         }
 
         #[test]
-        fn test_can_handle_filepath_unsupported_extension(ext in "[a-zA-Z0-9]{1,4}") {
+        fn can_handle_filepath_unsupported_extension(ext in "[a-zA-Z0-9]{1,4}") {
             prop_assume!(ext != ".md5" && ext != ".md5sum");
 
             let mut filepath = PathBuf::from(FileName().fake::<String>());
@@ -107,27 +108,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_parse_reads_standard_format_binary() {
-        let parser = get_parser();
-        let filename: String = FilePath().fake();
-        let checksum = Checksum {
-            algorithm: parser.algorithm().unwrap(),
-            digest: Faker.fake(),
-            mode: ChecksumMode::Binary,
-        };
-
-        let expected = Manifest {
-            version: None,
-            artifacts: HashMap::from([(filename.clone(), checksum.clone())]),
-        };
-
+    async fn parse_reads_standard_format_binary() {
+        let expected = fake_manifest(ChecksumAlgorithm::MD5, ChecksumMode::Binary);
         let mut test_file = NamedTempFile::new().expect("Failed to create temp file");
         test_file
-            .write(format!("{} {}", checksum.digest, filename).as_bytes())
+            .write(standard_to_string(&expected).await.unwrap().as_bytes())
             .expect("Failed to write to temp file");
         test_file.flush().expect("Failed to flush temp file");
 
-        let actual = parser
+        let actual = MD5SUMParser::default()
             .parse(&ManifestSource {
                 filepath: test_file.path().to_path_buf(),
                 format: ManifestFormat::MD5SUM,
@@ -140,85 +129,44 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_from_str_reads_standard_format_binary() {
-        let parser = get_parser();
-        let filename: String = FilePath().fake();
-        let checksum = Checksum {
-            algorithm: parser.algorithm().unwrap(),
-            digest: Faker.fake(),
-            mode: ChecksumMode::Binary,
-        };
-
-        let expected = Manifest {
-            version: None,
-            artifacts: HashMap::from([(filename.clone(), checksum.clone())]),
-        };
-        let actual = parser
-            .parse_str(format!("{} {}", checksum.digest, filename).as_str())
+    async fn parse_str_reads_standard_format_binary() {
+        let expected = fake_manifest(ChecksumAlgorithm::MD5, ChecksumMode::Binary);
+        let actual = MD5SUMParser::default()
+            .parse_str(standard_to_string(&expected).await.unwrap().as_str())
             .await
             .unwrap();
+
         assert_eq!(actual.version, expected.version);
         assert_eq!(actual.artifacts, expected.artifacts);
     }
 
     #[tokio::test]
-    async fn test_from_str_reads_standard_format_text() {
-        let parser = get_parser();
-        let filename: String = FilePath().fake();
-        let checksum = Checksum {
-            algorithm: parser.algorithm().unwrap(),
-            digest: Faker.fake(),
-            mode: ChecksumMode::Text,
-        };
-        let expected = Manifest {
-            version: None,
-            artifacts: HashMap::from([(filename.clone(), checksum.clone())]),
-        };
-        let actual = parser
-            .parse_str(format!("{}  {}", checksum.digest, filename).as_str())
+    async fn parse_str_reads_standard_format_text() {
+        let expected = fake_manifest(ChecksumAlgorithm::MD5, ChecksumMode::Text);
+        let actual = MD5SUMParser::default()
+            .parse_str(standard_to_string(&expected).await.unwrap().as_str())
             .await
             .unwrap();
+
         assert_eq!(actual.version, expected.version);
         assert_eq!(actual.artifacts, expected.artifacts);
     }
 
     #[tokio::test]
-    async fn test_to_string_produces_standard_format_binary() {
-        let parser = get_parser();
-        let filename: String = FilePath().fake();
-        let checksum: Checksum = Checksum {
-            algorithm: parser.algorithm().unwrap(),
-            digest: Faker.fake(),
-            mode: ChecksumMode::Binary,
-        };
-        let manifest = Manifest {
-            version: None,
-            artifacts: HashMap::from([(filename.clone(), checksum.clone())]),
-        };
+    async fn parse_str_produces_standard_format_binary() {
+        let manifest = fake_manifest(ChecksumAlgorithm::MD5, ChecksumMode::Binary);
+        let expected = standard_to_string(&manifest).await.unwrap();
 
-        assert_eq!(
-            parser.to_string(&manifest).await.unwrap(),
-            format!("{} {}", checksum.digest, filename)
-        );
+        let actual = MD5SUMParser::default().to_string(&manifest).await.unwrap();
+        assert_eq!(actual, expected);
     }
 
     #[tokio::test]
-    async fn test_to_string_produces_standard_format_text() {
-        let parser = get_parser();
-        let filename: String = FilePath().fake();
-        let checksum: Checksum = Checksum {
-            algorithm: parser.algorithm().unwrap(),
-            digest: Faker.fake(),
-            mode: ChecksumMode::Text,
-        };
-        let manifest = Manifest {
-            version: None,
-            artifacts: HashMap::from([(filename.clone(), checksum.clone())]),
-        };
+    async fn to_string_produces_standard_format_text() {
+        let manifest = fake_manifest(ChecksumAlgorithm::MD5, ChecksumMode::Text);
+        let expected = standard_to_string(&manifest).await.unwrap();
 
-        assert_eq!(
-            parser.to_string(&manifest).await.unwrap(),
-            format!("{}  {}", checksum.digest, filename)
-        );
+        let actual = MD5SUMParser::default().to_string(&manifest).await.unwrap();
+        assert_eq!(actual, expected);
     }
 }

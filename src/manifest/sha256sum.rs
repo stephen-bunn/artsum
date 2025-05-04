@@ -51,3 +51,129 @@ impl ManifestParser for SHA256SUMParser {
         standard_to_string(manifest).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use fake::{faker::filesystem::en::*, Fake};
+    use proptest::prelude::*;
+    use std::{
+        ffi::OsStr,
+        io::Write,
+        path::{Path, PathBuf},
+    };
+    use tempfile::NamedTempFile;
+
+    use super::*;
+    use crate::checksum::ChecksumMode;
+    use crate::manifest::{utils::fake_manifest, ManifestFormat};
+
+    #[test]
+    fn default_filename() {
+        assert_eq!(
+            SHA256SUMParser::default().default_filename(),
+            DEFAULT_MANIFEST_FILENAME
+        );
+    }
+
+    #[test]
+    fn algorithm() {
+        assert_eq!(
+            SHA256SUMParser::default().algorithm(),
+            Some(ChecksumAlgorithm::SHA256)
+        );
+    }
+
+    #[test]
+    fn can_handle_filepath_default() {
+        assert!(
+            SHA256SUMParser::default().can_handle_filepath(&Path::new(DEFAULT_MANIFEST_FILENAME))
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn can_handle_filepath_extension(ext in "sha256(sum)?") {
+            let mut filepath = PathBuf::from(FileName().fake::<String>());
+            filepath.set_extension(&OsStr::new(ext.as_str()));
+            prop_assert!(SHA256SUMParser::default().can_handle_filepath(filepath.as_path()));
+        }
+
+        #[test]
+        fn can_handle_filepath_unsupported_extension(ext in "[a-zA-Z0-9]{1,4}") {
+            prop_assume!(ext != ".sha256" && ext != ".sha256sum");
+
+            let mut filepath = PathBuf::from(FileName().fake::<String>());
+            filepath.set_extension(&OsStr::new(ext.as_str()));
+            prop_assert!(!SHA256SUMParser::default().can_handle_filepath(filepath.as_path()));
+        }
+    }
+
+    #[tokio::test]
+    async fn parse_reads_standard_format_binary() {
+        let expected = fake_manifest(ChecksumAlgorithm::SHA256, ChecksumMode::Binary);
+        let mut test_file = NamedTempFile::new().expect("Failed to create temp file");
+        test_file
+            .write(standard_to_string(&expected).await.unwrap().as_bytes())
+            .expect("Failed to write to temp file");
+        test_file.flush().expect("Failed to flush temp file");
+
+        let actual = SHA256SUMParser::default()
+            .parse(&ManifestSource {
+                filepath: test_file.path().to_path_buf(),
+                format: ManifestFormat::SHA256SUM,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(actual.version, expected.version);
+        assert_eq!(actual.artifacts, expected.artifacts);
+    }
+
+    #[tokio::test]
+    async fn parse_str_reads_standard_format_binary() {
+        let expected = fake_manifest(ChecksumAlgorithm::SHA256, ChecksumMode::Binary);
+        let actual = SHA256SUMParser::default()
+            .parse_str(standard_to_string(&expected).await.unwrap().as_str())
+            .await
+            .unwrap();
+
+        assert_eq!(actual.version, expected.version);
+        assert_eq!(actual.artifacts, expected.artifacts);
+    }
+
+    #[tokio::test]
+    async fn parse_str_reads_standard_format_text() {
+        let expected = fake_manifest(ChecksumAlgorithm::SHA256, ChecksumMode::Text);
+        let actual = SHA256SUMParser::default()
+            .parse_str(standard_to_string(&expected).await.unwrap().as_str())
+            .await
+            .unwrap();
+
+        assert_eq!(actual.version, expected.version);
+        assert_eq!(actual.artifacts, expected.artifacts);
+    }
+
+    #[tokio::test]
+    async fn parse_str_produces_standard_format_binary() {
+        let manifest = fake_manifest(ChecksumAlgorithm::SHA256, ChecksumMode::Binary);
+        let expected = standard_to_string(&manifest).await.unwrap();
+
+        let actual = SHA256SUMParser::default()
+            .to_string(&manifest)
+            .await
+            .unwrap();
+        assert_eq!(actual, expected);
+    }
+
+    #[tokio::test]
+    async fn to_string_produces_standard_format_text() {
+        let manifest = fake_manifest(ChecksumAlgorithm::SHA256, ChecksumMode::Text);
+        let expected = standard_to_string(&manifest).await.unwrap();
+
+        let actual = SHA256SUMParser::default()
+            .to_string(&manifest)
+            .await
+            .unwrap();
+        assert_eq!(actual, expected);
+    }
+}

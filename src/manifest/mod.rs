@@ -267,3 +267,62 @@ pub async fn standard_to_string(manifest: &Manifest) -> Result<String, ManifestE
 
     Ok(lines.join("\n"))
 }
+
+/// Shared test utilities
+#[cfg(test)]
+pub mod utils {
+    use fake::{faker::filesystem::en::*, Fake, Faker};
+
+    use crate::checksum::{Checksum, ChecksumAlgorithm, ChecksumMode};
+    use crate::manifest::Manifest;
+
+    pub fn fake_manifest(algorithm: ChecksumAlgorithm, mode: ChecksumMode) -> Manifest {
+        let mut artifacts = Vec::<(String, Checksum)>::with_capacity(5);
+        for _ in 0..5 {
+            artifacts.push((
+                FilePath().fake(),
+                Checksum {
+                    mode,
+                    algorithm,
+                    digest: Faker.fake(),
+                },
+            ));
+        }
+
+        Manifest {
+            version: None,
+            artifacts: artifacts.into_iter().collect(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use fake::{faker::filesystem::en::*, Fake, Faker};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn standard_to_string_produces_expected_output_for_text_mode() {
+        let filepath: String = FilePath().fake();
+        let digest: String = Faker.fake();
+        let artifacts: HashMap<String, Checksum> = vec![(
+            filepath.clone(),
+            Checksum {
+                mode: ChecksumMode::Text,
+                algorithm: ChecksumAlgorithm::SHA256,
+                digest: digest.clone(),
+            },
+        )]
+        .into_iter()
+        .collect();
+
+        let manifest = Manifest {
+            version: None,
+            artifacts,
+        };
+
+        let actual = standard_to_string(&manifest).await.unwrap();
+        assert_eq!(actual, format!("{}  {}", digest, filepath));
+    }
+}
