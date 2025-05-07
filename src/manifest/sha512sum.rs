@@ -154,7 +154,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn parse_str_produces_standard_format_binary() {
+    async fn to_string_produces_standard_format_binary() {
         let manifest = fake_manifest(ChecksumAlgorithm::SHA512, ChecksumMode::Binary);
         let expected = standard_to_string(&manifest).await.unwrap();
 
