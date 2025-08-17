@@ -72,6 +72,10 @@ The manifest file will contain the checksums of all files in the directory and i
         /// (overrides include patterns)
         #[arg(short, long, default_value = None)]
         exclude: Option<Vec<String>>,
+        /// Include files that are ignored through VCS ignore files
+        /// (e.g. .gitignore, .ignore)
+        #[arg(long, default_value_t = false)]
+        ignore_vcs: bool,
         /// Chunk size to use for generating checksums
         #[arg(short, long, default_value_t = DEFAULT_CHUNK_SIZE)]
         chunk_size: usize,
@@ -171,6 +175,7 @@ pub async fn cli() -> anyhow::Result<()> {
             glob,
             include,
             exclude,
+            ignore_vcs,
             chunk_size,
             max_workers,
         }) => {
@@ -183,6 +188,7 @@ pub async fn cli() -> anyhow::Result<()> {
                 glob,
                 include,
                 exclude,
+                ignore_vcs,
                 chunk_size,
                 max_workers: max_workers.unwrap_or(default_max_parallelism),
                 debug: args.debug,

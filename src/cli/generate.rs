@@ -12,6 +12,7 @@ use std::{
 };
 
 use colored::Colorize;
+use ignore::WalkBuilder;
 use log::{debug, error, info};
 
 use super::common::{
@@ -74,6 +75,10 @@ pub struct GenerateOptions {
     ///
     /// Files matching these regex patterns will be excluded.
     pub exclude: Option<Vec<String>>,
+
+    /// When true, includes files that are ignored by VCS ignore files
+    /// (e.g. .gitignore, .ignore).
+    pub ignore_vcs: bool,
 
     /// Size of chunks to use when calculating checksums (in bytes)
     ///
@@ -372,6 +377,59 @@ fn display_message_processor(
     }
 }
 
+struct WalkOptions {
+    /// The root directory to start walking from.
+    root_dirpath: PathBuf,
+
+    /// Optional glob pattern to filter files.
+    glob: Option<String>,
+
+    /// Whether to ignore version control system (VCS) files.
+    ignore_vcs: bool,
+}
+
+/// Walks through the directory and returns an iterator over file paths.
+///
+/// If `ignore_vcs` is true, it uses basic glob patterns to find files.
+/// Otherwise, it uses the [`ignore`](https://docs.rs/ignore) crate to walk the directory tree.
+fn walk_filepaths(options: WalkOptions) -> Result<impl Iterator<Item = PathBuf>, GenerateError> {
+    let WalkOptions {
+        root_dirpath,
+        glob,
+        ignore_vcs,
+    } = options;
+
+    if !ignore_vcs {
+        let walk_iter = WalkBuilder::new(root_dirpath)
+            .build()
+            .filter_map(Result::ok)
+            .filter_map(|entry| {
+                if let Some(file_type) = entry.file_type() {
+                    if file_type.is_file() {
+                        return Some(entry.into_path());
+                    }
+                }
+                None
+            });
+
+        Ok(Box::new(walk_iter) as Box<dyn Iterator<Item = PathBuf>>)
+    } else {
+        let glob_pattern = root_dirpath.join(glob.unwrap_or(String::from(DEFAULT_GLOB_PATTERN)));
+        let glob_iter = glob::glob_with(
+            glob_pattern.to_str().unwrap_or(DEFAULT_GLOB_PATTERN),
+            glob::MatchOptions {
+                case_sensitive: false,
+                require_literal_separator: false,
+                require_literal_leading_dot: false,
+            },
+        )?
+        .filter_map(Result::ok)
+        .filter_map(|entry| if entry.is_file() { Some(entry) } else { None });
+
+        Ok(Box::new(glob_iter) as Box<dyn Iterator<Item = PathBuf>>)
+    }
+}
+
 /// Generates checksums for files and creates a manifest file.
 ///
 /// Discovers files in the directory using glob pattern matching,
@@ -462,18 +520,11 @@ pub async fn generate(options: GenerateOptions) -> Result<(), GenerateError> {
         )
         .await?;
 
-    let glob_pattern =
-        manifest_dirpath.join(options.glob.unwrap_or(String::from(DEFAULT_GLOB_PATTERN)));
-    for path in (glob::glob_with(
-        glob_pattern.to_str().unwrap_or(DEFAULT_GLOB_PATTERN),
-        glob::MatchOptions {
-            case_sensitive: false,
-            require_literal_separator: false,
-            require_literal_leading_dot: false,
-        },
-    )?)
-    .flatten()
-    {
+    for path in walk_filepaths(WalkOptions {
+        root_dirpath: manifest_dirpath.clone(),
+        glob: options.glob,
+        ignore_vcs: options.ignore_vcs,
+    })? {
         if !path.exists() || path.is_dir() || path.is_symlink() {
             debug!("Skipping path {:?}", path);
             continue;
