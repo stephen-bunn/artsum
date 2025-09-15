@@ -14,26 +14,30 @@ use crate::{
     manifest::ManifestFormat,
 };
 
+use common::GlobalFlags;
+
+impl GlobalFlags {
+    /// Merge global flags, preferring subcommand flags when they are explicitly set
+    pub fn merge(&self, subcommand_flags: &GlobalFlags) -> GlobalFlags {
+        GlobalFlags {
+            // For verbosity, use the maximum of the two (so -vv at top level and -v at subcommand would result in -vv)
+            verbosity: std::cmp::max(self.verbosity, subcommand_flags.verbosity),
+            // For boolean flags, OR them together (so either place can enable the flag)
+            debug: self.debug || subcommand_flags.debug,
+            no_color: self.no_color || subcommand_flags.no_color,
+            no_progress: self.no_progress || subcommand_flags.no_progress,
+            no_display: self.no_display || subcommand_flags.no_display,
+        }
+    }
+}
+
 #[derive(Debug, clap::Parser)]
 #[clap(version = env!("CARGO_PKG_VERSION"))]
 pub struct Cli {
     #[clap(subcommand)]
     pub command: Option<Commands>,
-    #[arg(short, long, action = clap::ArgAction::Count, default_value_t = 0)]
-    /// Verbosity level
-    pub verbosity: u8,
-    /// Enable debug output
-    #[arg(long, default_value_t = false)]
-    pub debug: bool,
-    /// Disable color output
-    #[arg(long, default_value_t = false)]
-    pub no_color: bool,
-    /// Disable progress output
-    #[arg(long, default_value_t = false)]
-    pub no_progress: bool,
-    /// Disable display output
-    #[arg(long, default_value_t = false)]
-    pub no_display: bool,
+    #[command(flatten)]
+    pub global_flags: GlobalFlags,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -82,6 +86,8 @@ The manifest file will contain the checksums of all files in the directory and i
         /// Maximum number of workers to use
         #[arg(short = 'x', long = "max-workers")]
         max_workers: Option<usize>,
+        #[command(flatten)]
+        global_flags: GlobalFlags,
     },
     #[clap(
         name = "verify",
@@ -104,6 +110,8 @@ If no explict manifest file is provided, it will look for a manifest file in the
         /// Maximum number of workers to use
         #[arg(short = 'x', long = "max-workers")]
         max_workers: Option<usize>,
+        #[command(flatten)]
+        global_flags: GlobalFlags,
     },
     #[clap(
         name = "refresh",
@@ -126,45 +134,23 @@ If no explict manifest file is provided, it will look for a manifest file in the
         /// Maximum number of workers to use
         #[arg(short = 'x', long = "max-workers")]
         max_workers: Option<usize>,
+        #[command(flatten)]
+        global_flags: GlobalFlags,
     },
 }
 
 pub async fn cli() -> anyhow::Result<()> {
     let args = Cli::parse();
 
-    if args.debug {
-        let mut debug_loggers: Vec<Box<dyn simplelog::SharedLogger>> =
-            vec![simplelog::WriteLogger::new(
-                simplelog::LevelFilter::Debug,
-                simplelog::Config::default(),
-                std::fs::File::create(format!(
-                    "{}_artsum.log",
-                    chrono::Local::now().format("%FT%T")
-                ))?,
-            )];
-
-        if !args.no_display {
-            debug_loggers.push(simplelog::TermLogger::new(
-                simplelog::LevelFilter::Debug,
-                simplelog::Config::default(),
-                simplelog::TerminalMode::Mixed,
-                if args.no_color {
-                    ColorChoice::Never
-                } else {
-                    ColorChoice::Auto
-                },
-            ))
-        }
-        simplelog::CombinedLogger::init(debug_loggers).unwrap();
-    }
-
-    if args.no_color {
-        colored::control::set_override(false);
-    }
+    // Helper function to get merged global flags for each command
+    let get_merged_flags = |subcommand_flags: &GlobalFlags| -> GlobalFlags {
+        args.global_flags.merge(subcommand_flags)
+    };
 
     let default_max_parallelism = thread::available_parallelism()?.get();
 
     debug!("{:?}", args);
+    
     match args.command {
         Some(Commands::Generate {
             dirpath,
@@ -178,7 +164,40 @@ pub async fn cli() -> anyhow::Result<()> {
             ignore_vcs,
             chunk_size,
             max_workers,
+            ref global_flags,
         }) => {
+            let merged_flags = get_merged_flags(&global_flags);
+            
+            if merged_flags.debug {
+                let mut debug_loggers: Vec<Box<dyn simplelog::SharedLogger>> =
+                    vec![simplelog::WriteLogger::new(
+                        simplelog::LevelFilter::Debug,
+                        simplelog::Config::default(),
+                        std::fs::File::create(format!(
+                            "{}_artsum.log",
+                            chrono::Local::now().format("%FT%T")
+                        ))?,
+                    )];
+
+                if !merged_flags.no_display {
+                    debug_loggers.push(simplelog::TermLogger::new(
+                        simplelog::LevelFilter::Debug,
+                        simplelog::Config::default(),
+                        simplelog::TerminalMode::Mixed,
+                        if merged_flags.no_color {
+                            ColorChoice::Never
+                        } else {
+                            ColorChoice::Auto
+                        },
+                    ))
+                }
+                simplelog::CombinedLogger::init(debug_loggers).unwrap();
+            }
+
+            if merged_flags.no_color {
+                colored::control::set_override(false);
+            }
+
             generate::generate(generate::GenerateOptions {
                 dirpath,
                 output,
@@ -191,10 +210,10 @@ pub async fn cli() -> anyhow::Result<()> {
                 ignore_vcs,
                 chunk_size,
                 max_workers: max_workers.unwrap_or(default_max_parallelism),
-                debug: args.debug,
-                no_display: args.no_display || args.debug,
-                no_progress: args.no_progress || args.no_display || args.debug,
-                verbosity: args.verbosity,
+                debug: merged_flags.debug,
+                no_display: merged_flags.no_display || merged_flags.debug,
+                no_progress: merged_flags.no_progress || merged_flags.no_display || merged_flags.debug,
+                verbosity: merged_flags.verbosity,
             })
             .await?;
         }
@@ -203,16 +222,49 @@ pub async fn cli() -> anyhow::Result<()> {
             manifest,
             chunk_size,
             max_workers,
+            ref global_flags,
         }) => {
+            let merged_flags = get_merged_flags(&global_flags);
+            
+            if merged_flags.debug {
+                let mut debug_loggers: Vec<Box<dyn simplelog::SharedLogger>> =
+                    vec![simplelog::WriteLogger::new(
+                        simplelog::LevelFilter::Debug,
+                        simplelog::Config::default(),
+                        std::fs::File::create(format!(
+                            "{}_artsum.log",
+                            chrono::Local::now().format("%FT%T")
+                        ))?,
+                    )];
+
+                if !merged_flags.no_display {
+                    debug_loggers.push(simplelog::TermLogger::new(
+                        simplelog::LevelFilter::Debug,
+                        simplelog::Config::default(),
+                        simplelog::TerminalMode::Mixed,
+                        if merged_flags.no_color {
+                            ColorChoice::Never
+                        } else {
+                            ColorChoice::Auto
+                        },
+                    ))
+                }
+                simplelog::CombinedLogger::init(debug_loggers).unwrap();
+            }
+
+            if merged_flags.no_color {
+                colored::control::set_override(false);
+            }
+
             verify::verify(verify::VerifyOptions {
                 dirpath,
                 manifest,
                 chunk_size,
                 max_workers: max_workers.unwrap_or(default_max_parallelism),
-                debug: args.debug,
-                no_display: args.no_display || args.debug,
-                no_progress: args.no_progress || args.no_display || args.debug,
-                verbosity: args.verbosity,
+                debug: merged_flags.debug,
+                no_display: merged_flags.no_display || merged_flags.debug,
+                no_progress: merged_flags.no_progress || merged_flags.no_display || merged_flags.debug,
+                verbosity: merged_flags.verbosity,
             })
             .await?;
         }
@@ -221,29 +273,93 @@ pub async fn cli() -> anyhow::Result<()> {
             manifest,
             chunk_size,
             max_workers,
+            ref global_flags,
         }) => {
+            let merged_flags = get_merged_flags(&global_flags);
+            
+            if merged_flags.debug {
+                let mut debug_loggers: Vec<Box<dyn simplelog::SharedLogger>> =
+                    vec![simplelog::WriteLogger::new(
+                        simplelog::LevelFilter::Debug,
+                        simplelog::Config::default(),
+                        std::fs::File::create(format!(
+                            "{}_artsum.log",
+                            chrono::Local::now().format("%FT%T")
+                        ))?,
+                    )];
+
+                if !merged_flags.no_display {
+                    debug_loggers.push(simplelog::TermLogger::new(
+                        simplelog::LevelFilter::Debug,
+                        simplelog::Config::default(),
+                        simplelog::TerminalMode::Mixed,
+                        if merged_flags.no_color {
+                            ColorChoice::Never
+                        } else {
+                            ColorChoice::Auto
+                        },
+                    ))
+                }
+                simplelog::CombinedLogger::init(debug_loggers).unwrap();
+            }
+
+            if merged_flags.no_color {
+                colored::control::set_override(false);
+            }
+
             refresh::refresh(refresh::RefreshOptions {
                 dirpath,
                 manifest,
                 chunk_size,
                 max_workers: max_workers.unwrap_or(default_max_parallelism),
-                debug: args.debug,
-                no_display: args.no_display || args.debug,
-                no_progress: args.no_progress || args.no_display || args.debug,
-                verbosity: args.verbosity,
+                debug: merged_flags.debug,
+                no_display: merged_flags.no_display || merged_flags.debug,
+                no_progress: merged_flags.no_progress || merged_flags.no_display || merged_flags.debug,
+                verbosity: merged_flags.verbosity,
             })
             .await?;
         }
         None => {
+            // For the default command (verify), use only the top-level flags
+            if args.global_flags.debug {
+                let mut debug_loggers: Vec<Box<dyn simplelog::SharedLogger>> =
+                    vec![simplelog::WriteLogger::new(
+                        simplelog::LevelFilter::Debug,
+                        simplelog::Config::default(),
+                        std::fs::File::create(format!(
+                            "{}_artsum.log",
+                            chrono::Local::now().format("%FT%T")
+                        ))?,
+                    )];
+
+                if !args.global_flags.no_display {
+                    debug_loggers.push(simplelog::TermLogger::new(
+                        simplelog::LevelFilter::Debug,
+                        simplelog::Config::default(),
+                        simplelog::TerminalMode::Mixed,
+                        if args.global_flags.no_color {
+                            ColorChoice::Never
+                        } else {
+                            ColorChoice::Auto
+                        },
+                    ))
+                }
+                simplelog::CombinedLogger::init(debug_loggers).unwrap();
+            }
+
+            if args.global_flags.no_color {
+                colored::control::set_override(false);
+            }
+
             verify::verify(verify::VerifyOptions {
                 dirpath: current_dir().unwrap(),
                 manifest: None,
                 chunk_size: DEFAULT_CHUNK_SIZE,
                 max_workers: default_max_parallelism,
-                debug: args.debug,
-                no_display: args.no_display || args.debug,
-                no_progress: args.no_progress || args.no_display || args.debug,
-                verbosity: args.verbosity,
+                debug: args.global_flags.debug,
+                no_display: args.global_flags.no_display || args.global_flags.debug,
+                no_progress: args.global_flags.no_progress || args.global_flags.no_display || args.global_flags.debug,
+                verbosity: args.global_flags.verbosity,
             })
             .await?
         }
