@@ -5,6 +5,31 @@ Personal manifest checksum generation / verification utility.
 Occssionally I build manifests of large directory structures that I want to detect file changes in.
 I use this to generate a manifest at a point in time for a directory and then run the verification step to detect what files have been touched since I last generated the manifest.
 
+## Installation
+
+### Man Page
+
+When building from source, a man page is automatically generated during the build process. To install it manually:
+
+```bash
+# Build the project
+cargo build --release
+
+# Install the binary
+cargo install --path .
+
+# Install the man page (requires sudo on most systems)
+sudo mkdir -p /usr/local/share/man/man1
+sudo cp target/man/artsum.1 /usr/local/share/man/man1/
+sudo mandb  # Update the man database (optional, may not be available on all systems)
+```
+
+After installation, you can view the man page with:
+
+```bash
+man artsum
+```
+
 ## Manifest Generation
 
 ```bash
