@@ -9,11 +9,11 @@ I use this to generate a manifest at a point in time for a directory and then ru
 
 ### Man Page
 
-When building from source, a man page is automatically generated during the build process. To install it manually:
+A man page can be generated using the cargo xtask command:
 
 ```bash
-# Build the project
-cargo build --release
+# Generate the man page
+cargo xtask man
 
 # Install the binary
 cargo install --path .

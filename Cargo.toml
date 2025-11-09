@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "xtask"]
+
 [package]
 name = "artsum"
 description = "A simple command-line tool for generating and verifying a directory manifest of checksums"
@@ -41,10 +44,6 @@ thiserror = "2.0.3"
 tokio = { version = "1.41.1", features = ["full"] }
 toml = "0.8.19"
 xxhash-rust = { version = "0.8.12", features = ["xxh3", "xxh32", "xxh64"] }
-
-[build-dependencies]
-clap = { version = "4.5.27", features = ["color", "derive"] }
-clap_mangen = "0.2.25"
 
 [dev-dependencies]
 tempfile = "3.5.0"

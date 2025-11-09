@@ -3,9 +3,12 @@ use clap_mangen::Man;
 use std::fs;
 use std::path::PathBuf;
 
+// Version should match the artsum crate version
+const ARTSUM_VERSION: &str = "0.2.0";
+
 fn build_cli() -> Command {
     Command::new("artsum")
-        .version(env!("CARGO_PKG_VERSION"))
+        .version(ARTSUM_VERSION)
         .about("A simple command-line tool for generating and verifying a directory manifest of checksums")
         .author("Stephen Bunn <stephen@bunn.io>")
         .arg(
@@ -180,30 +183,46 @@ fn build_cli() -> Command {
         )
 }
 
-fn main() -> std::io::Result<()> {
-    // Create the man directory in OUT_DIR
-    let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-    let man_dir = out_dir.join("man");
-    fs::create_dir_all(&man_dir)?;
+fn generate_man_page(out_dir: &PathBuf) -> anyhow::Result<()> {
+    fs::create_dir_all(out_dir)?;
 
-    // Generate the man page
     let cmd = build_cli();
     let man = Man::new(cmd);
     let mut buffer: Vec<u8> = Vec::new();
     man.render(&mut buffer)?;
 
-    // Write to the man directory in OUT_DIR
-    let man_path = man_dir.join("artsum.1");
-    fs::write(&man_path, buffer.clone())?;
+    let man_path = out_dir.join("artsum.1");
+    fs::write(&man_path, buffer)?;
 
-    // Also write to a predictable location in the target directory for easy access
-    let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
-    let target_man_dir = manifest_dir.join("target").join("man");
-    fs::create_dir_all(&target_man_dir)?;
-    let target_man_path = target_man_dir.join("artsum.1");
-    fs::write(&target_man_path, buffer)?;
+    println!("Man page generated at {:?}", man_path);
+    Ok(())
+}
 
-    println!("cargo:warning=Man page generated at {:?}", target_man_path);
+fn main() -> anyhow::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
     
+    if args.len() < 2 {
+        eprintln!("Usage: cargo xtask <COMMAND>");
+        eprintln!("\nCommands:");
+        eprintln!("  man    Generate the man page");
+        std::process::exit(1);
+    }
+
+    match args[1].as_str() {
+        "man" => {
+            // Default to target/man directory
+            let out_dir = PathBuf::from(
+                std::env::var("OUT_DIR").unwrap_or_else(|_| "target/man".to_string())
+            );
+            generate_man_page(&out_dir)?;
+        }
+        _ => {
+            eprintln!("Unknown command: {}", args[1]);
+            eprintln!("\nAvailable commands:");
+            eprintln!("  man    Generate the man page");
+            std::process::exit(1);
+        }
+    }
+
     Ok(())
 }
