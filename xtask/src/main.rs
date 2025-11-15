@@ -187,14 +187,29 @@ fn generate_man_page(out_dir: &PathBuf) -> anyhow::Result<()> {
     fs::create_dir_all(out_dir)?;
 
     let cmd = build_cli();
-    let man = Man::new(cmd);
+    
+    // Generate main man page
+    let man = Man::new(cmd.clone());
     let mut buffer: Vec<u8> = Vec::new();
     man.render(&mut buffer)?;
-
     let man_path = out_dir.join("artsum.1");
     fs::write(&man_path, buffer)?;
-
     println!("Man page generated at {:?}", man_path);
+
+    // Generate man pages for each subcommand
+    let subcommands = cmd.get_subcommands().filter(|cmd| cmd.get_name() != "help");
+    
+    for subcmd in subcommands {
+        let name = subcmd.get_name();
+        let man = Man::new(subcmd.clone());
+        let mut buffer: Vec<u8> = Vec::new();
+        man.render(&mut buffer)?;
+        
+        let man_path = out_dir.join(format!("artsum-{}.1", name));
+        fs::write(&man_path, buffer)?;
+        println!("Man page generated at {:?}", man_path);
+    }
+
     Ok(())
 }
 

@@ -16,6 +16,9 @@ exclude = [".github", ".gitignore", ".justfile", "cliff.toml"]
 [package.metadata.deb]
 assets = [
     ["target/man/artsum.1", "usr/share/man/man1/", "644"],
+    ["target/man/artsum-generate.1", "usr/share/man/man1/", "644"],
+    ["target/man/artsum-verify.1", "usr/share/man/man1/", "644"],
+    ["target/man/artsum-refresh.1", "usr/share/man/man1/", "644"],
 ]
 
 [dependencies]
