@@ -130,6 +130,10 @@ pub enum GenerateError {
         expected: ChecksumAlgorithm,
     },
 
+    /// Error when 'best' algorithm is used with non-artsum format.
+    #[error("The 'best' algorithm option is only supported with the 'artsum' manifest format, not '{0}'")]
+    BestAlgorithmRequiresArtsumFormat(ManifestFormat),
+
     #[error("Failed to join checksum generation task, {0}")]
     TaskJoinFailure(#[from] tokio::task::JoinError),
 
@@ -468,11 +472,30 @@ pub async fn generate(options: GenerateOptions) -> Result<(), GenerateError> {
         .output
         .unwrap_or(manifest_parser.build_manifest_filepath(Some(&manifest_dirpath)));
 
+    // Validate that 'best' algorithm is only used with artsum format
+    // Check this before resolving the algorithm
+    if let Some(algorithm) = options.algorithm {
+        if algorithm == ChecksumAlgorithm::Best && manifest_format != ManifestFormat::ARTSUM {
+            return Err(GenerateError::BestAlgorithmRequiresArtsumFormat(
+                manifest_format,
+            ));
+        }
+    }
+
     let checksum_algorithm = manifest_parser
         .algorithm()
         .unwrap_or_else(|| options.algorithm.unwrap_or_default());
     let checksum_mode = options.mode.unwrap_or_default();
     let checksum_chunk_size = options.chunk_size;
+
+    // Additional validation for 'best' algorithm with artsum format
+    if checksum_algorithm == ChecksumAlgorithm::Best
+        && manifest_format != ManifestFormat::ARTSUM
+    {
+        return Err(GenerateError::BestAlgorithmRequiresArtsumFormat(
+            manifest_format,
+        ));
+    }
 
     if let Some(algorithm) = options.algorithm {
         if algorithm != checksum_algorithm {

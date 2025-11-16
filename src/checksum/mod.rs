@@ -120,16 +120,37 @@ pub enum ChecksumAlgorithm {
     XXH64,
     BLAKE2B256,
     BLAKE2B512,
+    /// Automatically selects the best (fastest) algorithm based on file size.
+    /// Only works with the artsum format.
+    Best,
 }
 
 impl Default for ChecksumAlgorithm {
     /// Returns the default checksum algorithm.
     fn default() -> Self {
-        ChecksumAlgorithm::XXH3
+        ChecksumAlgorithm::Best
     }
 }
 
 impl ChecksumAlgorithm {
+    /// Selects the best (fastest) algorithm based on file size.
+    /// 
+    /// Based on xxHash performance benchmarks:
+    /// - For files < 1KB: CRC32 is competitive
+    /// - For files >= 1KB: XXH3 is generally fastest
+    pub async fn select_best(filepath: &PathBuf) -> Result<Self, ChecksumError> {
+        let metadata = tokio::fs::metadata(filepath).await?;
+        let file_size = metadata.len();
+        
+        // For very small files (< 1KB), CRC32 is competitive
+        // For everything else, XXH3 is the fastest
+        if file_size < 1024 {
+            Ok(ChecksumAlgorithm::CRC32)
+        } else {
+            Ok(ChecksumAlgorithm::XXH3)
+        }
+    }
+    
     /// Calculates the checksum of a file using the current algorithm.
     pub async fn checksum_file(&self, options: &ChecksumOptions) -> Result<Vec<u8>, ChecksumError> {
         checksum_file(options).await.map_err(ChecksumError::IoError)
@@ -247,13 +268,18 @@ impl Checksum {
 
     /// Calculates the checksum of a file using the specified algorithm.
     pub async fn from_file(options: ChecksumOptions) -> Result<Self, ChecksumError> {
-        // let mode = options.mode.clone();
-        // let algorithm = options.algorithm.clone();
+        // Resolve the algorithm if it's Best
+        let actual_algorithm = if options.algorithm == ChecksumAlgorithm::Best {
+            ChecksumAlgorithm::select_best(&options.filepath).await?
+        } else {
+            options.algorithm
+        };
+        
         let digest = options.algorithm.checksum_file(&options).await?;
 
         Ok(Checksum {
             mode: options.mode,
-            algorithm: options.algorithm,
+            algorithm: actual_algorithm,
             digest: hex::encode(digest),
         })
     }
@@ -283,6 +309,24 @@ pub async fn checksum_file(options: &ChecksumOptions) -> Result<Vec<u8>, Error> 
         ChecksumAlgorithm::XXH64 => xxhash::calculate_xxh64(options).await,
         ChecksumAlgorithm::BLAKE2B256 => blake::calculate_blake2b256(options).await,
         ChecksumAlgorithm::BLAKE2B512 => blake::calculate_blake2b512(options).await,
+        ChecksumAlgorithm::Best => {
+            // Select the best algorithm based on file size
+            let best_algorithm = ChecksumAlgorithm::select_best(&options.filepath)
+                .await
+                .map_err(|_| Error::new(ErrorKind::NotFound, "Failed to determine best algorithm"))?;
+            
+            // Create new options with the selected algorithm
+            let best_options = ChecksumOptions {
+                filepath: options.filepath.clone(),
+                algorithm: best_algorithm,
+                mode: options.mode,
+                chunk_size: options.chunk_size,
+                progress_callback: options.progress_callback,
+            };
+            
+            // Box the recursive call to avoid infinite size
+            Box::pin(checksum_file(&best_options)).await
+        }
     }
 }
 
