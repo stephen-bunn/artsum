@@ -181,13 +181,40 @@ fn build_cli() -> Command {
                         .help("Maximum number of workers to use"),
                 ),
         )
+        .subcommand(Command::new("completions")
+            .about("Generate shell completions for popular shells")
+            .long_about(r#"Generate shell completions for popular shells.
+
+    This command will generate completions for the specified shell (bash, zsh, or fish).
+    You can either print them to stdout, save them to a file, or install them automatically."#)
+            .arg(
+                Arg::new("shell")
+                    .help("The shell to generate completions for")
+                    .required(true)
+                    .index(1)
+                    .value_parser(["bash", "zsh", "fish", "powershell", "elvish"])
+                )
+            .arg(
+                Arg::new("output")
+                    .help("Path to output the completions file to")
+                    .short('o')
+                    .long("output")
+            )
+            .arg(
+                Arg::new("install")
+                    .help("Install the completions to the appropriate shell configuration directory")
+                    .short('i')
+                    .long("install")
+                    .action(ArgAction::SetTrue)
+            )
+        )
 }
 
 fn generate_man_page(out_dir: &PathBuf) -> anyhow::Result<()> {
     fs::create_dir_all(out_dir)?;
 
     let cmd = build_cli();
-    
+
     // Generate main man page
     let man = Man::new(cmd.clone());
     let mut buffer: Vec<u8> = Vec::new();
@@ -198,13 +225,13 @@ fn generate_man_page(out_dir: &PathBuf) -> anyhow::Result<()> {
 
     // Generate man pages for each subcommand
     let subcommands = cmd.get_subcommands().filter(|cmd| cmd.get_name() != "help");
-    
+
     for subcmd in subcommands {
         let name = subcmd.get_name();
         let man = Man::new(subcmd.clone());
         let mut buffer: Vec<u8> = Vec::new();
         man.render(&mut buffer)?;
-        
+
         let man_path = out_dir.join(format!("artsum-{}.1", name));
         fs::write(&man_path, buffer)?;
         println!("Man page generated at {:?}", man_path);
@@ -215,7 +242,7 @@ fn generate_man_page(out_dir: &PathBuf) -> anyhow::Result<()> {
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    
+
     if args.len() < 2 {
         eprintln!("Usage: cargo xtask <COMMAND>");
         eprintln!("\nCommands:");
@@ -227,7 +254,7 @@ fn main() -> anyhow::Result<()> {
         "man" => {
             // Default to target/man directory
             let out_dir = PathBuf::from(
-                std::env::var("OUT_DIR").unwrap_or_else(|_| "target/man".to_string())
+                std::env::var("OUT_DIR").unwrap_or_else(|_| "target/man".to_string()),
             );
             generate_man_page(&out_dir)?;
         }
