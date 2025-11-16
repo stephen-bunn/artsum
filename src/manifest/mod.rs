@@ -44,12 +44,19 @@ pub enum ManifestError {
 )]
 #[strum(serialize_all = "lowercase")]
 pub enum ManifestFormat {
+    /// The ARTSUM format, TOML format used by artsum.
+    /// Each checksum specifies its algorithm.
     #[default]
     ARTSUM,
+    /// The MD5SUM format, based on the MD5 hashing algorithm.
     MD5SUM,
+    /// The SHA1SUM format, based on the SHA-1 hashing algorithm.
     SHA1SUM,
+    /// The SHA256SUM format, based on the SHA-256 hashing algorithm.
     SHA256SUM,
+    /// The SHA512SUM format, based on the SHA-512 hashing algorithm.
     SHA512SUM,
+    /// The B2SUM format, based on the BLAKE2 hashing algorithm.
     B2SUM,
 }
 

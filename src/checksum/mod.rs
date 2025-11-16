@@ -110,15 +110,25 @@ where
 )]
 #[strum(serialize_all = "lowercase")]
 pub enum ChecksumAlgorithm {
+    /// MD5 (Message-Digest Algorithm 5) is a widely used cryptographic hash function producing a 128-bit hash value.
     MD5,
+    /// SHA-1 (Secure Hash Algorithm 1) is a cryptographic hash function that produces a 160-bit hash value.
     SHA1,
+    /// SHA-256 (Secure Hash Algorithm 256) is part of the SHA-2 family, producing a 256-bit hash value.
     SHA256,
+    /// SHA-512 (Secure Hash Algorithm 512) is part of the SHA-2 family, producing a 512-bit hash value.
     SHA512,
+    /// CRC32 (Cyclic Redundancy Check 32-bit) is a checksum algorithm commonly used for error-checking in data storage and transmission.
     CRC32,
+    /// XXH3 is a high-speed, non-cryptographic hash algorithm optimized for modern CPUs.
     XXH3,
+    /// XXH32 is a fast, non-cryptographic hash algorithm producing a 32-bit hash value.
     XXH32,
+    /// XXH64 is a fast, non-cryptographic hash algorithm producing a 64-bit hash value.
     XXH64,
+    /// BLAKE2B256 is a cryptographic hash function producing a 256-bit hash value, optimized for speed and security.
     BLAKE2B256,
+    /// BLAKE2B512 is a cryptographic hash function producing a 512-bit hash value, optimized for speed and security.
     BLAKE2B512,
     /// Automatically selects the best (fastest) algorithm based on file size.
     /// Only works with the artsum format.
@@ -134,14 +144,14 @@ impl Default for ChecksumAlgorithm {
 
 impl ChecksumAlgorithm {
     /// Selects the best (fastest) algorithm based on file size.
-    /// 
+    ///
     /// Based on xxHash performance benchmarks:
     /// - For files < 1KB: CRC32 is competitive
     /// - For files >= 1KB: XXH3 is generally fastest
     pub async fn select_best(filepath: &PathBuf) -> Result<Self, ChecksumError> {
         let metadata = tokio::fs::metadata(filepath).await?;
         let file_size = metadata.len();
-        
+
         // For very small files (< 1KB), CRC32 is competitive
         // For everything else, XXH3 is the fastest
         if file_size < 1024 {
@@ -150,7 +160,7 @@ impl ChecksumAlgorithm {
             Ok(ChecksumAlgorithm::XXH3)
         }
     }
-    
+
     /// Calculates the checksum of a file using the current algorithm.
     pub async fn checksum_file(&self, options: &ChecksumOptions) -> Result<Vec<u8>, ChecksumError> {
         checksum_file(options).await.map_err(ChecksumError::IoError)
@@ -274,7 +284,7 @@ impl Checksum {
         } else {
             options.algorithm
         };
-        
+
         let digest = options.algorithm.checksum_file(&options).await?;
 
         Ok(Checksum {
@@ -313,8 +323,10 @@ pub async fn checksum_file(options: &ChecksumOptions) -> Result<Vec<u8>, Error> 
             // Select the best algorithm based on file size
             let best_algorithm = ChecksumAlgorithm::select_best(&options.filepath)
                 .await
-                .map_err(|_| Error::new(ErrorKind::NotFound, "Failed to determine best algorithm"))?;
-            
+                .map_err(|_| {
+                    Error::new(ErrorKind::NotFound, "Failed to determine best algorithm")
+                })?;
+
             // Create new options with the selected algorithm
             let best_options = ChecksumOptions {
                 filepath: options.filepath.clone(),
@@ -323,7 +335,7 @@ pub async fn checksum_file(options: &ChecksumOptions) -> Result<Vec<u8>, Error> 
                 chunk_size: options.chunk_size,
                 progress_callback: options.progress_callback,
             };
-            
+
             // Box the recursive call to avoid infinite size
             Box::pin(checksum_file(&best_options)).await
         }

@@ -489,9 +489,7 @@ pub async fn generate(options: GenerateOptions) -> Result<(), GenerateError> {
     let checksum_chunk_size = options.chunk_size;
 
     // Additional validation for 'best' algorithm with artsum format
-    if checksum_algorithm == ChecksumAlgorithm::Best
-        && manifest_format != ManifestFormat::ARTSUM
-    {
+    if checksum_algorithm == ChecksumAlgorithm::Best && manifest_format != ManifestFormat::ARTSUM {
         return Err(GenerateError::BestAlgorithmRequiresArtsumFormat(
             manifest_format,
         ));

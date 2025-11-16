@@ -36,7 +36,7 @@ mod tests {
             no_progress: false,
             no_display: false,
         };
-        
+
         let subcommand = GlobalFlags {
             verbosity: 1,
             debug: false,
@@ -44,7 +44,7 @@ mod tests {
             no_progress: false,
             no_display: false,
         };
-        
+
         let merged = top_level.merge(&subcommand);
         assert_eq!(merged.verbosity, 2); // Should use the maximum
     }
@@ -58,7 +58,7 @@ mod tests {
             no_progress: false,
             no_display: false,
         };
-        
+
         let subcommand = GlobalFlags {
             verbosity: 0,
             debug: false,
@@ -66,7 +66,7 @@ mod tests {
             no_progress: false,
             no_display: false,
         };
-        
+
         let merged = top_level.merge(&subcommand);
         assert!(merged.debug); // Should be true if either is true
     }
@@ -80,7 +80,7 @@ mod tests {
             no_progress: false,
             no_display: false,
         };
-        
+
         let subcommand = GlobalFlags {
             verbosity: 0,
             debug: true,
@@ -88,7 +88,7 @@ mod tests {
             no_progress: true,
             no_display: true,
         };
-        
+
         let merged = top_level.merge(&subcommand);
         assert!(merged.debug);
         assert!(merged.no_color);
