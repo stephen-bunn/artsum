@@ -445,3 +445,105 @@ where
         ChecksumMode::Text => process_file_text(options).await,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[tokio::test]
+    async fn test_select_best_small_file() {
+        // Create a small file (< 1KB)
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "small content").unwrap();
+        let path = temp_file.path().to_path_buf();
+
+        let algorithm = ChecksumAlgorithm::select_best(&path).await.unwrap();
+        assert_eq!(algorithm, ChecksumAlgorithm::CRC32);
+    }
+
+    #[tokio::test]
+    async fn test_select_best_large_file() {
+        // Create a large file (>= 1KB)
+        let mut temp_file = NamedTempFile::new().unwrap();
+        let large_content = vec![0u8; 2048]; // 2KB
+        temp_file.write_all(&large_content).unwrap();
+        let path = temp_file.path().to_path_buf();
+
+        let algorithm = ChecksumAlgorithm::select_best(&path).await.unwrap();
+        assert_eq!(algorithm, ChecksumAlgorithm::XXH3);
+    }
+
+    #[tokio::test]
+    async fn test_checksum_best_algorithm_small_file() {
+        // Create a small file
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "test content").unwrap();
+        let path = temp_file.path().to_path_buf();
+
+        let checksum = Checksum::from_file(ChecksumOptions {
+            filepath: path.clone(),
+            algorithm: ChecksumAlgorithm::Best,
+            mode: ChecksumMode::Binary,
+            chunk_size: None,
+            progress_callback: None,
+        })
+        .await
+        .unwrap();
+
+        // Should resolve to CRC32 for small files
+        assert_eq!(checksum.algorithm, ChecksumAlgorithm::CRC32);
+        assert!(!checksum.digest.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_checksum_best_algorithm_large_file() {
+        // Create a large file
+        let mut temp_file = NamedTempFile::new().unwrap();
+        let large_content = vec![0u8; 2048]; // 2KB
+        temp_file.write_all(&large_content).unwrap();
+        let path = temp_file.path().to_path_buf();
+
+        let checksum = Checksum::from_file(ChecksumOptions {
+            filepath: path.clone(),
+            algorithm: ChecksumAlgorithm::Best,
+            mode: ChecksumMode::Binary,
+            chunk_size: None,
+            progress_callback: None,
+        })
+        .await
+        .unwrap();
+
+        // Should resolve to XXH3 for large files
+        assert_eq!(checksum.algorithm, ChecksumAlgorithm::XXH3);
+        assert!(!checksum.digest.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_checksum_best_algorithm_text_mode() {
+        // Test that text mode is preserved with best algorithm
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "test content\n").unwrap();
+        let path = temp_file.path().to_path_buf();
+
+        let checksum = Checksum::from_file(ChecksumOptions {
+            filepath: path.clone(),
+            algorithm: ChecksumAlgorithm::Best,
+            mode: ChecksumMode::Text,
+            chunk_size: None,
+            progress_callback: None,
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(checksum.mode, ChecksumMode::Text);
+        assert_eq!(checksum.algorithm, ChecksumAlgorithm::CRC32);
+    }
+
+    #[test]
+    fn test_checksum_algorithm_default_is_best() {
+        // Verify that the default algorithm is Best
+        assert_eq!(ChecksumAlgorithm::default(), ChecksumAlgorithm::Best);
+    }
+}
