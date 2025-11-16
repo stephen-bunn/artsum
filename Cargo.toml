@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "xtask"]
+
 [package]
 name = "artsum"
 description = "A simple command-line tool for generating and verifying a directory manifest of checksums"
@@ -9,6 +12,14 @@ license = "MIT"
 keywords = ["command-line", "checksum", "manifest"]
 categories = ["command-line-utilities"]
 exclude = [".github", ".gitignore", ".justfile", "cliff.toml"]
+
+[package.metadata.deb]
+assets = [
+    ["target/man/artsum.1", "usr/share/man/man1/", "644"],
+    ["target/man/artsum-generate.1", "usr/share/man/man1/", "644"],
+    ["target/man/artsum-verify.1", "usr/share/man/man1/", "644"],
+    ["target/man/artsum-refresh.1", "usr/share/man/man1/", "644"],
+]
 
 [dependencies]
 anyhow = "1.0.93"

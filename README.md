@@ -5,6 +5,34 @@ Personal manifest checksum generation / verification utility.
 Occssionally I build manifests of large directory structures that I want to detect file changes in.
 I use this to generate a manifest at a point in time for a directory and then run the verification step to detect what files have been touched since I last generated the manifest.
 
+## Installation
+
+### Man Pages
+
+Man pages for the main command and all subcommands can be generated using the cargo xtask command:
+
+```bash
+# Generate man pages (creates artsum.1, artsum-generate.1, artsum-verify.1, artsum-refresh.1)
+cargo xtask man
+
+# Install the binary (if man pages were generated first, build.rs will attempt to install them automatically)
+cargo install --path .
+
+# Manual installation of man pages (requires sudo on most systems)
+sudo mkdir -p /usr/local/share/man/man1
+sudo cp target/man/*.1 /usr/local/share/man/man1/
+sudo mandb  # Update the man database (optional, may not be available on all systems)
+```
+
+After installation, you can view the man pages with:
+
+```bash
+man artsum              # Main command documentation
+man artsum-generate     # Generate subcommand documentation
+man artsum-verify       # Verify subcommand documentation
+man artsum-refresh      # Refresh subcommand documentation
+```
+
 ## Manifest Generation
 
 ```bash
