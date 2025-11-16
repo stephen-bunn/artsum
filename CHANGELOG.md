@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Added `best` algorithm option that automatically selects the fastest checksum algorithm based on file size
+  - Files < 1KB use CRC32 (competitive for small files)
+  - Files ≥ 1KB use XXH3 (fastest for larger files)
+- Added validation to ensure `best` algorithm only works with `artsum` format
+
+### Changed
+
+- Changed default checksum algorithm from `xxh3` to `best` for optimal performance
+
 ## [0.2.0] - 2025-08-17
 
 ### Added
