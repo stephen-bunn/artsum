@@ -1,4 +1,5 @@
 mod common;
+mod completions;
 mod generate;
 mod refresh;
 mod verify;
@@ -137,6 +138,25 @@ If no explict manifest file is provided, it will look for a manifest file in the
         #[command(flatten)]
         global_flags: GlobalFlags,
     },
+    #[clap(
+        name = "completions",
+        about = "Generate shell completions for popular shells",
+        long_about = r#"Generate shell completions for popular shells.
+
+This command will generate completions for the specified shell (bash, zsh, or fish).
+You can either print them to stdout, save them to a file, or install them automatically."#
+    )]
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+        /// Output file path (prints to stdout if not specified)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Automatically install completions to the appropriate location
+        #[arg(short, long, default_value_t = false)]
+        install: bool,
+    },
 }
 
 pub async fn cli() -> anyhow::Result<()> {
@@ -150,7 +170,7 @@ pub async fn cli() -> anyhow::Result<()> {
     let default_max_parallelism = thread::available_parallelism()?.get();
 
     debug!("{:?}", args);
-    
+
     match args.command {
         Some(Commands::Generate {
             dirpath,
@@ -167,7 +187,7 @@ pub async fn cli() -> anyhow::Result<()> {
             ref global_flags,
         }) => {
             let merged_flags = get_merged_flags(&global_flags);
-            
+
             if merged_flags.debug {
                 let mut debug_loggers: Vec<Box<dyn simplelog::SharedLogger>> =
                     vec![simplelog::WriteLogger::new(
@@ -212,7 +232,9 @@ pub async fn cli() -> anyhow::Result<()> {
                 max_workers: max_workers.unwrap_or(default_max_parallelism),
                 debug: merged_flags.debug,
                 no_display: merged_flags.no_display || merged_flags.debug,
-                no_progress: merged_flags.no_progress || merged_flags.no_display || merged_flags.debug,
+                no_progress: merged_flags.no_progress
+                    || merged_flags.no_display
+                    || merged_flags.debug,
                 verbosity: merged_flags.verbosity,
             })
             .await?;
@@ -225,7 +247,7 @@ pub async fn cli() -> anyhow::Result<()> {
             ref global_flags,
         }) => {
             let merged_flags = get_merged_flags(&global_flags);
-            
+
             if merged_flags.debug {
                 let mut debug_loggers: Vec<Box<dyn simplelog::SharedLogger>> =
                     vec![simplelog::WriteLogger::new(
@@ -263,7 +285,9 @@ pub async fn cli() -> anyhow::Result<()> {
                 max_workers: max_workers.unwrap_or(default_max_parallelism),
                 debug: merged_flags.debug,
                 no_display: merged_flags.no_display || merged_flags.debug,
-                no_progress: merged_flags.no_progress || merged_flags.no_display || merged_flags.debug,
+                no_progress: merged_flags.no_progress
+                    || merged_flags.no_display
+                    || merged_flags.debug,
                 verbosity: merged_flags.verbosity,
             })
             .await?;
@@ -276,7 +300,7 @@ pub async fn cli() -> anyhow::Result<()> {
             ref global_flags,
         }) => {
             let merged_flags = get_merged_flags(&global_flags);
-            
+
             if merged_flags.debug {
                 let mut debug_loggers: Vec<Box<dyn simplelog::SharedLogger>> =
                     vec![simplelog::WriteLogger::new(
@@ -314,10 +338,23 @@ pub async fn cli() -> anyhow::Result<()> {
                 max_workers: max_workers.unwrap_or(default_max_parallelism),
                 debug: merged_flags.debug,
                 no_display: merged_flags.no_display || merged_flags.debug,
-                no_progress: merged_flags.no_progress || merged_flags.no_display || merged_flags.debug,
+                no_progress: merged_flags.no_progress
+                    || merged_flags.no_display
+                    || merged_flags.debug,
                 verbosity: merged_flags.verbosity,
             })
             .await?;
+        }
+        Some(Commands::Completions {
+            shell,
+            output,
+            install,
+        }) => {
+            completions::completions(completions::CompletionsOptions {
+                shell,
+                output,
+                install,
+            })?;
         }
         None => {
             // For the default command (verify), use only the top-level flags
@@ -358,7 +395,9 @@ pub async fn cli() -> anyhow::Result<()> {
                 max_workers: default_max_parallelism,
                 debug: args.global_flags.debug,
                 no_display: args.global_flags.no_display || args.global_flags.debug,
-                no_progress: args.global_flags.no_progress || args.global_flags.no_display || args.global_flags.debug,
+                no_progress: args.global_flags.no_progress
+                    || args.global_flags.no_display
+                    || args.global_flags.debug,
                 verbosity: args.global_flags.verbosity,
             })
             .await?
