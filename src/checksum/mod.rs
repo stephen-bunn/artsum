@@ -181,8 +181,11 @@ impl ChecksumAlgorithm {
     clap::ValueEnum,
 )]
 pub enum ChecksumMode {
+    /// Binary mode processes the file as raw binary data.
     #[strum(serialize = "")]
     Binary,
+
+    /// Text mode processes the file line by line, normalizing line endings to '\n'.
     #[strum(serialize = "text")]
     Text,
 }
