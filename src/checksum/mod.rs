@@ -110,26 +110,57 @@ where
 )]
 #[strum(serialize_all = "lowercase")]
 pub enum ChecksumAlgorithm {
+    /// MD5 (Message-Digest Algorithm 5) is a widely used cryptographic hash function producing a 128-bit hash value.
     MD5,
+    /// SHA-1 (Secure Hash Algorithm 1) is a cryptographic hash function that produces a 160-bit hash value.
     SHA1,
+    /// SHA-256 (Secure Hash Algorithm 256) is part of the SHA-2 family, producing a 256-bit hash value.
     SHA256,
+    /// SHA-512 (Secure Hash Algorithm 512) is part of the SHA-2 family, producing a 512-bit hash value.
     SHA512,
+    /// CRC32 (Cyclic Redundancy Check 32-bit) is a checksum algorithm commonly used for error-checking in data storage and transmission.
     CRC32,
+    /// XXH3 is a high-speed, non-cryptographic hash algorithm optimized for modern CPUs.
     XXH3,
+    /// XXH32 is a fast, non-cryptographic hash algorithm producing a 32-bit hash value.
     XXH32,
+    /// XXH64 is a fast, non-cryptographic hash algorithm producing a 64-bit hash value.
     XXH64,
+    /// BLAKE2B256 is a cryptographic hash function producing a 256-bit hash value, optimized for speed and security.
     BLAKE2B256,
+    /// BLAKE2B512 is a cryptographic hash function producing a 512-bit hash value, optimized for speed and security.
     BLAKE2B512,
+    /// Automatically selects the best (fastest) algorithm based on file size.
+    /// Only works with the artsum format.
+    Best,
 }
 
 impl Default for ChecksumAlgorithm {
     /// Returns the default checksum algorithm.
     fn default() -> Self {
-        ChecksumAlgorithm::XXH3
+        ChecksumAlgorithm::Best
     }
 }
 
 impl ChecksumAlgorithm {
+    /// Selects the best (fastest) algorithm based on file size.
+    ///
+    /// Based on xxHash performance benchmarks:
+    /// - For files < 1KB: CRC32 is competitive
+    /// - For files >= 1KB: XXH3 is generally fastest
+    pub async fn select_best(filepath: &PathBuf) -> Result<Self, ChecksumError> {
+        let metadata = tokio::fs::metadata(filepath).await?;
+        let file_size = metadata.len();
+
+        // For very small files (< 1KB), CRC32 is competitive
+        // For everything else, XXH3 is the fastest
+        if file_size < 1024 {
+            Ok(ChecksumAlgorithm::CRC32)
+        } else {
+            Ok(ChecksumAlgorithm::XXH3)
+        }
+    }
+
     /// Calculates the checksum of a file using the current algorithm.
     pub async fn checksum_file(&self, options: &ChecksumOptions) -> Result<Vec<u8>, ChecksumError> {
         checksum_file(options).await.map_err(ChecksumError::IoError)
@@ -247,13 +278,18 @@ impl Checksum {
 
     /// Calculates the checksum of a file using the specified algorithm.
     pub async fn from_file(options: ChecksumOptions) -> Result<Self, ChecksumError> {
-        // let mode = options.mode.clone();
-        // let algorithm = options.algorithm.clone();
+        // Resolve the algorithm if it's Best
+        let actual_algorithm = if options.algorithm == ChecksumAlgorithm::Best {
+            ChecksumAlgorithm::select_best(&options.filepath).await?
+        } else {
+            options.algorithm
+        };
+
         let digest = options.algorithm.checksum_file(&options).await?;
 
         Ok(Checksum {
             mode: options.mode,
-            algorithm: options.algorithm,
+            algorithm: actual_algorithm,
             digest: hex::encode(digest),
         })
     }
@@ -283,6 +319,26 @@ pub async fn checksum_file(options: &ChecksumOptions) -> Result<Vec<u8>, Error> 
         ChecksumAlgorithm::XXH64 => xxhash::calculate_xxh64(options).await,
         ChecksumAlgorithm::BLAKE2B256 => blake::calculate_blake2b256(options).await,
         ChecksumAlgorithm::BLAKE2B512 => blake::calculate_blake2b512(options).await,
+        ChecksumAlgorithm::Best => {
+            // Select the best algorithm based on file size
+            let best_algorithm = ChecksumAlgorithm::select_best(&options.filepath)
+                .await
+                .map_err(|_| {
+                    Error::new(ErrorKind::NotFound, "Failed to determine best algorithm")
+                })?;
+
+            // Create new options with the selected algorithm
+            let best_options = ChecksumOptions {
+                filepath: options.filepath.clone(),
+                algorithm: best_algorithm,
+                mode: options.mode,
+                chunk_size: options.chunk_size,
+                progress_callback: options.progress_callback,
+            };
+
+            // Box the recursive call to avoid infinite size
+            Box::pin(checksum_file(&best_options)).await
+        }
     }
 }
 
@@ -399,5 +455,107 @@ where
     match options.mode {
         ChecksumMode::Binary => process_file_binary(options).await,
         ChecksumMode::Text => process_file_text(options).await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[tokio::test]
+    async fn test_select_best_small_file() {
+        // Create a small file (< 1KB)
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "small content").unwrap();
+        let path = temp_file.path().to_path_buf();
+
+        let algorithm = ChecksumAlgorithm::select_best(&path).await.unwrap();
+        assert_eq!(algorithm, ChecksumAlgorithm::CRC32);
+    }
+
+    #[tokio::test]
+    async fn test_select_best_large_file() {
+        // Create a large file (>= 1KB)
+        let mut temp_file = NamedTempFile::new().unwrap();
+        let large_content = vec![0u8; 2048]; // 2KB
+        temp_file.write_all(&large_content).unwrap();
+        let path = temp_file.path().to_path_buf();
+
+        let algorithm = ChecksumAlgorithm::select_best(&path).await.unwrap();
+        assert_eq!(algorithm, ChecksumAlgorithm::XXH3);
+    }
+
+    #[tokio::test]
+    async fn test_checksum_best_algorithm_small_file() {
+        // Create a small file
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "test content").unwrap();
+        let path = temp_file.path().to_path_buf();
+
+        let checksum = Checksum::from_file(ChecksumOptions {
+            filepath: path.clone(),
+            algorithm: ChecksumAlgorithm::Best,
+            mode: ChecksumMode::Binary,
+            chunk_size: None,
+            progress_callback: None,
+        })
+        .await
+        .unwrap();
+
+        // Should resolve to CRC32 for small files
+        assert_eq!(checksum.algorithm, ChecksumAlgorithm::CRC32);
+        assert!(!checksum.digest.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_checksum_best_algorithm_large_file() {
+        // Create a large file
+        let mut temp_file = NamedTempFile::new().unwrap();
+        let large_content = vec![0u8; 2048]; // 2KB
+        temp_file.write_all(&large_content).unwrap();
+        let path = temp_file.path().to_path_buf();
+
+        let checksum = Checksum::from_file(ChecksumOptions {
+            filepath: path.clone(),
+            algorithm: ChecksumAlgorithm::Best,
+            mode: ChecksumMode::Binary,
+            chunk_size: None,
+            progress_callback: None,
+        })
+        .await
+        .unwrap();
+
+        // Should resolve to XXH3 for large files
+        assert_eq!(checksum.algorithm, ChecksumAlgorithm::XXH3);
+        assert!(!checksum.digest.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_checksum_best_algorithm_text_mode() {
+        // Test that text mode is preserved with best algorithm
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "test content\n").unwrap();
+        let path = temp_file.path().to_path_buf();
+
+        let checksum = Checksum::from_file(ChecksumOptions {
+            filepath: path.clone(),
+            algorithm: ChecksumAlgorithm::Best,
+            mode: ChecksumMode::Text,
+            chunk_size: None,
+            progress_callback: None,
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(checksum.mode, ChecksumMode::Text);
+        assert_eq!(checksum.algorithm, ChecksumAlgorithm::CRC32);
+    }
+
+    #[test]
+    fn test_checksum_algorithm_default_is_best() {
+        // Verify that the default algorithm is Best
+        assert_eq!(ChecksumAlgorithm::default(), ChecksumAlgorithm::Best);
     }
 }

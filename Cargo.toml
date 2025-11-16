@@ -35,7 +35,7 @@ glob = "0.3.2"
 hex = "0.4.3"
 ignore = "0.4.23"
 log = "0.4.26"
-md5 = "0.7.0"
+md5 = "0.8.0"
 pathdiff = "0.2.3"
 regex = "1.11.1"
 serde = { version = "1.0.215", features = ["derive"] }
@@ -43,11 +43,11 @@ serde_json = "1.0.133"
 sha1 = "0.10.6"
 sha2 = "0.10.8"
 simplelog = "0.12.2"
-strum = "0.26.3"
-strum_macros = "0.26.4"
+strum = "0.27.2"
+strum_macros = "0.27.2"
 thiserror = "2.0.3"
 tokio = { version = "1.41.1", features = ["full"] }
-toml = "0.8.19"
+toml = "0.9.8"
 xxhash-rust = { version = "0.8.12", features = ["xxh3", "xxh32", "xxh64"] }
 
 [dev-dependencies]

@@ -10,5 +10,5 @@ pub async fn calculate_md5(options: &ChecksumOptions) -> Result<Vec<u8>, Error> 
     }))
     .await?;
 
-    Ok(hasher.compute().0.to_vec())
+    Ok(hasher.finalize().0.to_vec())
 }

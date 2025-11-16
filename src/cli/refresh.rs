@@ -71,6 +71,10 @@ pub enum RefreshError {
     #[error("{0}")]
     ManifestError(#[from] crate::manifest::ManifestError),
 
+    /// Error when 'best' algorithm is used with non-artsum format.
+    #[error("The 'best' algorithm option is only supported with the 'artsum' manifest format, not '{0}'")]
+    BestAlgorithmRequiresArtsumFormat(crate::manifest::ManifestFormat),
+
     #[error("Failed to join checksum generation task, {0}")]
     TaskJoinFailure(#[from] tokio::task::JoinError),
 
@@ -370,6 +374,17 @@ pub async fn refresh(options: RefreshOptions) -> Result<(), RefreshError> {
     let manifest_filepath = manifest_source.filepath.clone();
     let manifest_parser = manifest_source.parser();
     let manifest = manifest_parser.parse(&manifest_source).await?;
+
+    // Validate that 'best' algorithm is only used with artsum format
+    if manifest_source.format != crate::manifest::ManifestFormat::ARTSUM {
+        for checksum in manifest.artifacts.values() {
+            if checksum.algorithm == ChecksumAlgorithm::Best {
+                return Err(RefreshError::BestAlgorithmRequiresArtsumFormat(
+                    manifest_source.format,
+                ));
+            }
+        }
+    }
 
     let task_counters = Arc::new(RefreshTaskCounters {
         total: Arc::new(AtomicUsize::new(manifest.artifacts.len())),
