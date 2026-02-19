@@ -96,7 +96,7 @@ The manifest file will contain the checksums of all files in the directory and i
         long_about = r#"Verify the checksums of files in the given directory.
 
 This command will verify the checksums of the files listed in the manifest file. d
-If no explict manifest file is provided, it will look for a manifest file in the directory."#
+If no explicit manifest file is provided, it will look for a manifest file in the directory."#
     )]
     Verify {
         /// Path to the directory containing the files to verify
@@ -120,7 +120,7 @@ If no explict manifest file is provided, it will look for a manifest file in the
         long_about = r#"Refresh a manifest file in the given directory
 
 This command will recalculate and rewrite the checksums of the files listed in the manifest file.
-If no explict manifest file is provided, it will look for a manifest file in the directory."#
+If no explicit manifest file is provided, it will look for a manifest file in the directory."#
     )]
     Refresh {
         /// Path to the directory containing the files to refresh
