@@ -234,33 +234,12 @@ impl<
             }
         };
 
-        // Build per-worker item rows (capped, hidden when verbose)
+        // Determine max visible worker rows (hidden when verbose)
         let show_worker_rows = self.verbosity == 0;
-        let visible_spinner_count = if show_worker_rows {
+        let max_visible_workers = if show_worker_rows {
             self.max_workers.min(MAX_VISIBLE_WORKER_SPINNERS)
         } else {
             0
-        };
-        let overflow_count = if show_worker_rows {
-            self.max_workers.saturating_sub(MAX_VISIBLE_WORKER_SPINNERS)
-        } else {
-            0
-        };
-        let worker_spinners: Vec<ProgressBar> = (0..visible_spinner_count)
-            .map(|_| {
-                let pb = multi_progress.add(ProgressBar::new_spinner());
-                pb.set_style(worker_item_style());
-                pb
-            })
-            .collect();
-
-        let overflow_progress_bar = if overflow_count > 0 {
-            let progress_bar = multi_progress.add(ProgressBar::new_spinner());
-            progress_bar.set_style(overflow_style());
-            progress_bar.set_message(format!("(+{} more workers)", overflow_count));
-            Some(progress_bar)
-        } else {
-            None
         };
 
         let (tx, rx) = tokio::sync::mpsc::channel(self.buffer_size);
@@ -276,7 +255,7 @@ impl<
             self.no_progress,
             Arc::clone(&multi_progress),
             overall_progress_bar.clone(),
-            worker_spinners.clone(),
+            max_visible_workers,
         )));
 
         // Spawn producer (if progress enabled)
@@ -287,8 +266,6 @@ impl<
                 self.worker_slot_registry.clone(),
                 10,
                 overall_progress_bar.clone(),
-                worker_spinners.clone(),
-                overflow_progress_bar,
             )));
         }
 
@@ -369,7 +346,7 @@ fn bar_style() -> ProgressStyle {
 fn spinner_style() -> ProgressStyle {
     ProgressStyle::with_template("{spinner:.green}  {msg}")
         .unwrap()
-        .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", ""])
+        .tick_strings(&["◜", "◜", "◝", "◝", "◞", "◞", "◟", "◟", ""])
 }
 
 fn worker_item_style() -> ProgressStyle {
@@ -392,17 +369,91 @@ async fn display_message_consumer<
     no_progress: bool,
     multi_progress: Arc<MultiProgress>,
     overall_progress_bar: ProgressBar,
-    worker_spinners: Vec<ProgressBar>,
+    max_visible_workers: usize,
 ) -> anyhow::Result<()> {
+    let mut visible_progress_bars: std::collections::HashMap<usize, ProgressBar> =
+        std::collections::HashMap::new();
+    let mut overflow_queue: std::collections::VecDeque<(usize, String)> =
+        std::collections::VecDeque::new();
+    let mut overflow_progress_bar: Option<ProgressBar> = None;
+
     while let Some(message) = rx.recv().await {
         match message {
             DisplayMessage::Exit => break,
             DisplayMessage::InProgress { slot, filename } => {
-                if let Some(pb) = worker_spinners.get(slot) {
-                    match filename {
-                        Some(name) => pb.set_message(name),
-                        None => pb.set_message(""),
+                if max_visible_workers == 0 {
+                    continue;
+                }
+
+                match filename {
+                    // worker started or filename updated
+                    Some(name) if !name.is_empty() => {
+                        if let Some(progress_bar) = visible_progress_bars.get(&slot) {
+                            // already visible, update the message
+                            progress_bar.set_message(name);
+                        } else if let Some(pos) =
+                            overflow_queue.iter().position(|(s, _)| *s == slot)
+                        {
+                            // already in overflow, update stored filename
+                            overflow_queue[pos].1 = name;
+                            update_overflow_row(
+                                &multi_progress,
+                                &mut overflow_progress_bar,
+                                overflow_queue.len(),
+                            );
+                        } else if visible_progress_bars.len() < max_visible_workers {
+                            // new worker, slot available in visible area
+                            let progress_bar = multi_progress
+                                .insert_after(&overall_progress_bar, ProgressBar::new_spinner());
+                            progress_bar.set_style(worker_item_style());
+                            progress_bar.set_message(name);
+                            visible_progress_bars.insert(slot, progress_bar);
+                        } else {
+                            // new worker, no visible slot available, goes to overflow
+                            overflow_queue.push_back((slot, name));
+                            update_overflow_row(
+                                &multi_progress,
+                                &mut overflow_progress_bar,
+                                overflow_queue.len(),
+                            );
+                        }
                     }
+
+                    // worker finished
+                    None => {
+                        if let Some(progress_bar) = visible_progress_bars.remove(&slot) {
+                            multi_progress.remove(&progress_bar);
+
+                            // promote oldest overflow worker if one exists
+                            if let Some((overflow_slot, overflow_name)) = overflow_queue.pop_front()
+                            {
+                                let progress_bar = multi_progress.insert_after(
+                                    &overall_progress_bar,
+                                    ProgressBar::new_spinner(),
+                                );
+                                progress_bar.set_style(worker_item_style());
+                                progress_bar.set_message(overflow_name);
+                                visible_progress_bars.insert(overflow_slot, progress_bar);
+                            }
+
+                            update_overflow_row(
+                                &multi_progress,
+                                &mut overflow_progress_bar,
+                                overflow_queue.len(),
+                            );
+                        } else {
+                            // was in overflow, never became visible
+                            overflow_queue.retain(|(s, _)| *s != slot);
+                            update_overflow_row(
+                                &multi_progress,
+                                &mut overflow_progress_bar,
+                                overflow_queue.len(),
+                            );
+                        }
+                    }
+
+                    // empty name, slot just acquired, filename not set yet
+                    Some(_) => {}
                 }
             }
             DisplayMessage::Progress {
@@ -438,6 +489,25 @@ async fn display_message_consumer<
     Ok(())
 }
 
+fn update_overflow_row(
+    multi_progress: &MultiProgress,
+    overflow_progress_bar: &mut Option<ProgressBar>,
+    count: usize,
+) {
+    if count == 0 {
+        if let Some(progress_bar) = overflow_progress_bar.take() {
+            multi_progress.remove(&progress_bar);
+        }
+    } else {
+        let progress_bar = overflow_progress_bar.get_or_insert_with(|| {
+            let pb = multi_progress.add(ProgressBar::new_spinner());
+            pb.set_style(overflow_style());
+            pb
+        });
+        progress_bar.set_message(format!("(+{} active)", count));
+    }
+}
+
 async fn progress_message_producer<
     DResult: DisplayResult,
     DError: DisplayError,
@@ -449,8 +519,6 @@ async fn progress_message_producer<
     worker_slots: Option<Arc<WorkerSlotRegistry>>,
     refresh_millis: u64,
     overall_progress_bar: ProgressBar,
-    _worker_spinners: Vec<ProgressBar>,
-    _overflow_pb: Option<ProgressBar>,
 ) -> anyhow::Result<()> {
     let mut last_progress = 0;
     let mut last_snapshot: Vec<Option<String>> = Vec::new();
