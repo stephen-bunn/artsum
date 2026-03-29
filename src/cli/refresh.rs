@@ -334,6 +334,7 @@ fn display_message_processor(
 
             vec![parts.join(" ")]
         }
+        DisplayMessage::InProgress { .. } => vec![],
         DisplayMessage::Exit => vec![],
     }
 }
@@ -403,11 +404,9 @@ pub async fn refresh(options: RefreshOptions) -> Result<(), RefreshError> {
         .with_buffer_size(max(
             1024,
             options.max_workers * 8 + (options.max_workers.saturating_sub(4) * 4),
-        ));
-
-    if !options.no_progress && !options.debug {
-        display_manager = display_manager.with_progress(10);
-    }
+        ))
+        .with_no_progress(options.no_progress || options.debug)
+        .with_worker_slots(task_manager.worker_slots.clone(), options.max_workers);
 
     let display_context = RefreshDisplayContext {};
     display_manager
@@ -416,13 +415,16 @@ pub async fn refresh(options: RefreshOptions) -> Result<(), RefreshError> {
 
     for (filename, old) in &manifest.artifacts {
         task_manager
-            .spawn(RefreshTaskOptions {
-                filepath: PathBuf::from(filename),
-                checksum: old.clone(),
-                checksum_algorithm: Some(old.algorithm),
-                checksum_mode: Some(old.mode),
-                chunk_size: options.chunk_size,
-            })
+            .spawn(
+                RefreshTaskOptions {
+                    filepath: PathBuf::from(filename),
+                    checksum: old.clone(),
+                    checksum_algorithm: Some(old.algorithm),
+                    checksum_mode: Some(old.mode),
+                    chunk_size: options.chunk_size,
+                },
+                Some(filename.clone()),
+            )
             .await;
     }
 
@@ -450,6 +452,7 @@ pub async fn refresh(options: RefreshOptions) -> Result<(), RefreshError> {
     }
 
     info!("Writing manifest to {:?}", manifest_filepath);
+    let manifest_output_filepath = manifest_filepath.clone();
     tokio::fs::write(
         manifest_filepath,
         manifest_parser
@@ -467,6 +470,30 @@ pub async fn refresh(options: RefreshOptions) -> Result<(), RefreshError> {
     let (sync_tx, sync_rx) = tokio::sync::oneshot::channel::<()>();
     display_manager.stop(sync_tx).await?;
     sync_rx.await.unwrap();
+
+    if !options.no_display && !options.debug {
+        let updated = task_counters.updated.load(Ordering::Relaxed);
+        let unchanged = task_counters.unchanged.load(Ordering::Relaxed);
+        let removed = task_counters.removed.load(Ordering::Relaxed);
+        let updated_str = if updated > 0 {
+            format!("✓ {} updated", updated).green().to_string()
+        } else {
+            format!("✓ {} updated", updated).dimmed().to_string()
+        };
+        let unchanged_str = format!("= {} unchanged", unchanged).blue().to_string();
+        let removed_str = if removed > 0 {
+            format!("✗ {} removed", removed).yellow().to_string()
+        } else {
+            format!("✗ {} removed", removed).dimmed().to_string()
+        };
+        println!(
+            "{}  {}  {}  → {}",
+            updated_str,
+            unchanged_str,
+            removed_str,
+            manifest_output_filepath.display()
+        );
+    }
 
     if task_counters.error.load(Ordering::Relaxed) > 0 {
         std::process::exit(1);

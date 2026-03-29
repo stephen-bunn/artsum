@@ -15,10 +15,26 @@ exclude = [".github", ".gitignore", ".justfile", "cliff.toml"]
 
 [package.metadata.deb]
 assets = [
-    ["target/man/artsum.1", "usr/share/man/man1/", "644"],
-    ["target/man/artsum-generate.1", "usr/share/man/man1/", "644"],
-    ["target/man/artsum-verify.1", "usr/share/man/man1/", "644"],
-    ["target/man/artsum-refresh.1", "usr/share/man/man1/", "644"],
+    [
+        "target/man/artsum.1",
+        "usr/share/man/man1/",
+        "644",
+    ],
+    [
+        "target/man/artsum-generate.1",
+        "usr/share/man/man1/",
+        "644",
+    ],
+    [
+        "target/man/artsum-verify.1",
+        "usr/share/man/man1/",
+        "644",
+    ],
+    [
+        "target/man/artsum-refresh.1",
+        "usr/share/man/man1/",
+        "644",
+    ],
 ]
 
 [dependencies]
@@ -34,20 +50,21 @@ crc32fast = "1.4.2"
 glob = "0.3.2"
 hex = "0.4.3"
 ignore = "0.4.23"
+indicatif = "0.18.4"
 log = "0.4.26"
 md5 = "0.8.0"
 pathdiff = "0.2.3"
 regex = "1.11.1"
 serde = { version = "1.0.215", features = ["derive"] }
 serde_json = "1.0.133"
-sha1 = "0.10.6"
-sha2 = "0.10.8"
+sha1 = "0.11.0"
+sha2 = "0.11.0"
 simplelog = "0.12.2"
-strum = "0.27.2"
-strum_macros = "0.27.2"
+strum = "0.28.0"
+strum_macros = "0.28.0"
 thiserror = "2.0.3"
 tokio = { version = "1.41.1", features = ["full"] }
-toml = "0.9.8"
+toml = "1.1.0"
 xxhash-rust = { version = "0.8.12", features = ["xxh3", "xxh32", "xxh64"] }
 
 [dev-dependencies]

@@ -50,6 +50,50 @@ pub type TaskProcessorResult<TResult, TError> =
 pub type TaskProcessor<TResult, TError, TCounters, TOptions> =
     fn(TOptions, Arc<TCounters>) -> TaskProcessorResult<TResult, TError>;
 
+/// Registry tracking which files are currently being processed by worker slots.
+///
+/// Each slot corresponds to a concurrency permit. When a worker acquires a slot,
+/// it sets the filename being processed; when done, it clears the slot.
+pub struct WorkerSlotRegistry {
+    slots: Vec<std::sync::Mutex<Option<String>>>,
+}
+
+impl WorkerSlotRegistry {
+    /// Creates a new registry with the given number of slots.
+    pub fn new(capacity: usize) -> Arc<Self> {
+        Arc::new(Self {
+            slots: (0..capacity).map(|_| std::sync::Mutex::new(None)).collect(),
+        })
+    }
+
+    /// Finds the first idle slot, marks it occupied, and returns its index.
+    pub fn acquire(&self) -> usize {
+        for (i, slot) in self.slots.iter().enumerate() {
+            let mut guard = slot.lock().unwrap();
+            if guard.is_none() {
+                *guard = Some(String::new());
+                return i;
+            }
+        }
+        0 // fallback: shouldn't happen with semaphore parity
+    }
+
+    /// Sets the filename displayed for a slot (None = release/idle).
+    pub fn set(&self, index: usize, name: Option<String>) {
+        if let Some(slot) = self.slots.get(index) {
+            *slot.lock().unwrap() = name;
+        }
+    }
+
+    /// Returns a point-in-time snapshot of all slot values.
+    pub fn snapshot(&self) -> Vec<Option<String>> {
+        self.slots
+            .iter()
+            .map(|s| s.lock().unwrap().clone())
+            .collect()
+    }
+}
+
 /// Manager for concurrent task execution.
 ///
 /// Handles spawning and tracking of asynchronous tasks with configurable
@@ -65,6 +109,9 @@ pub struct TaskManager<
 
     /// Collection of spawned task handles
     pub tasks: Vec<tokio::task::JoinHandle<Result<TResult, TError>>>,
+
+    /// Registry tracking which files are being processed by each worker slot
+    pub worker_slots: Arc<WorkerSlotRegistry>,
 
     /// Function that processes individual tasks
     task_processor: TaskProcessor<TResult, TError, TCounters, TOptions>,
@@ -90,6 +137,7 @@ impl<TResult: TaskResult, TError: TaskError, TCounters: TaskCounters, TOptions: 
             counters,
             task_processor,
             tasks: Vec::new(),
+            worker_slots: WorkerSlotRegistry::new(1),
             worker_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
         }
     }
@@ -103,7 +151,7 @@ impl<TResult: TaskResult, TError: TaskError, TCounters: TaskCounters, TOptions: 
     /// # Panics
     ///
     /// Panics if `max_workers` is set to 0.
-    pub fn with_max_workers(self, max_workers: usize) -> Self {
+    pub fn with_max_workers(mut self, max_workers: usize) -> Self {
         if max_workers == 0 {
             panic!("max_workers must be greater than 0");
         }
@@ -121,6 +169,7 @@ impl<TResult: TaskResult, TError: TaskError, TCounters: TaskCounters, TOptions: 
             Ordering::Equal => {}
         }
 
+        self.worker_slots = WorkerSlotRegistry::new(max_workers);
         self
     }
 
@@ -139,10 +188,12 @@ impl<TResult: TaskResult, TError: TaskError, TCounters: TaskCounters, TOptions: 
     /// # Arguments
     ///
     /// * `options` - Configuration options for the task.
-    pub async fn spawn(&mut self, options: TOptions) {
+    /// * `filename` - Optional display name for tracking in-progress files.
+    pub async fn spawn(&mut self, options: TOptions, filename: Option<String>) {
         let worker_semaphore = self.worker_semaphore.clone();
         let counters = self.counters.clone();
         let task_processor = self.task_processor;
+        let worker_slots = self.worker_slots.clone();
 
         let task = tokio::spawn(async move {
             let permit = worker_semaphore
@@ -150,8 +201,12 @@ impl<TResult: TaskResult, TError: TaskError, TCounters: TaskCounters, TOptions: 
                 .await
                 .map_err(TaskManagerError::TaskPermitFailure);
 
+            let slot_index = worker_slots.acquire();
+            worker_slots.set(slot_index, filename);
+
             let result = task_processor(options, counters).await;
 
+            worker_slots.set(slot_index, None);
             drop(permit);
             result
         });

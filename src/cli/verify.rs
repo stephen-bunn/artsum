@@ -413,6 +413,7 @@ fn display_message_processor(
 
             vec![parts.join(" ")]
         }
+        DisplayMessage::InProgress { .. } => vec![],
         DisplayMessage::Exit => vec![],
     }
 }
@@ -473,12 +474,11 @@ pub async fn verify(options: VerifyOptions) -> Result<(), VerifyError> {
         .with_buffer_size(max(
             1024,
             options.max_workers * 8 + (options.max_workers.saturating_sub(4) * 4),
-        ));
+        ))
+        .with_no_progress(options.no_progress || options.debug)
+        .with_worker_slots(task_manager.worker_slots.clone(), options.max_workers);
 
-    if !options.no_progress && !options.debug {
-        display_manager = display_manager.with_progress(10);
-    }
-
+    let manifest_filepath = manifest_source.filepath.clone();
     let display_context = VerifyDisplayContext {};
     display_manager
         .start(manifest_source, display_context)
@@ -486,12 +486,15 @@ pub async fn verify(options: VerifyOptions) -> Result<(), VerifyError> {
 
     for (filename, expected) in &manifest.artifacts {
         task_manager
-            .spawn(VerifyTaskOptions {
-                dirpath: options.dirpath.clone(),
-                filename: filename.clone(),
-                expected: expected.clone(),
-                chunk_size: options.chunk_size,
-            })
+            .spawn(
+                VerifyTaskOptions {
+                    dirpath: options.dirpath.clone(),
+                    filename: filename.clone(),
+                    expected: expected.clone(),
+                    chunk_size: options.chunk_size,
+                },
+                Some(filename.clone()),
+            )
             .await;
     }
 
@@ -509,6 +512,30 @@ pub async fn verify(options: VerifyOptions) -> Result<(), VerifyError> {
     let (sync_tx, sync_rx) = tokio::sync::oneshot::channel::<()>();
     display_manager.stop(sync_tx).await?;
     sync_rx.await.unwrap();
+
+    if !options.no_display && !options.debug {
+        let valid = task_counters.valid.load(Ordering::Relaxed);
+        let invalid = task_counters.invalid.load(Ordering::Relaxed);
+        let missing = task_counters.missing.load(Ordering::Relaxed);
+        let valid_str = format!("✓ {} valid", valid).green().to_string();
+        let invalid_str = if invalid > 0 {
+            format!("✗ {} invalid", invalid).bold().red().to_string()
+        } else {
+            format!("✗ {} invalid", invalid).dimmed().to_string()
+        };
+        let missing_str = if missing > 0 {
+            format!("? {} missing", missing).yellow().to_string()
+        } else {
+            format!("? {} missing", missing).dimmed().to_string()
+        };
+        println!(
+            "{}  {}  {}  → {}",
+            valid_str,
+            invalid_str,
+            missing_str,
+            manifest_filepath.display()
+        );
+    }
 
     if task_counters.invalid.load(Ordering::Relaxed) > 0 {
         std::process::exit(1);

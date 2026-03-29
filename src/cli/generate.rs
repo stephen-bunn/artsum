@@ -377,6 +377,7 @@ fn display_message_processor(
 
             vec![parts.join(" ")]
         }
+        DisplayMessage::InProgress { .. } => vec![],
         DisplayMessage::Exit => vec![],
     }
 }
@@ -518,11 +519,9 @@ pub async fn generate(options: GenerateOptions) -> Result<(), GenerateError> {
         .with_buffer_size(max(
             1024,
             options.max_workers * 8 + (options.max_workers.saturating_sub(4) * 4),
-        ));
-
-    if !options.no_progress && !options.debug {
-        display_manager = display_manager.with_progress(10);
-    }
+        ))
+        .with_no_progress(options.no_progress || options.debug)
+        .with_worker_slots(task_manager.worker_slots.clone(), options.max_workers);
 
     let display_context = GenerateDisplayContext {
         manifest_filepath: manifest_filepath.clone(),
@@ -573,23 +572,31 @@ pub async fn generate(options: GenerateOptions) -> Result<(), GenerateError> {
                 .any(|p| p.is_match(&canonical_path_string))
             {
                 debug!("Including checksum generation for {:?}", path);
+                let display_name = canonical_path.to_string_lossy().into_owned();
                 task_manager
-                    .spawn(GenerateTaskOptions {
+                    .spawn(
+                        GenerateTaskOptions {
+                            filepath: canonical_path,
+                            algorithm: checksum_algorithm,
+                            mode: checksum_mode,
+                            chunk_size: checksum_chunk_size,
+                        },
+                        Some(display_name),
+                    )
+                    .await;
+            }
+        } else {
+            let display_name = canonical_path.to_string_lossy().into_owned();
+            task_manager
+                .spawn(
+                    GenerateTaskOptions {
                         filepath: canonical_path,
                         algorithm: checksum_algorithm,
                         mode: checksum_mode,
                         chunk_size: checksum_chunk_size,
-                    })
-                    .await;
-            }
-        } else {
-            task_manager
-                .spawn(GenerateTaskOptions {
-                    filepath: canonical_path,
-                    algorithm: checksum_algorithm,
-                    mode: checksum_mode,
-                    chunk_size: checksum_chunk_size,
-                })
+                    },
+                    Some(display_name),
+                )
                 .await;
         }
     }
@@ -631,6 +638,22 @@ pub async fn generate(options: GenerateOptions) -> Result<(), GenerateError> {
     let (sync_tx, sync_rx) = tokio::sync::oneshot::channel::<()>();
     display_manager.stop(sync_tx).await?;
     sync_rx.await.unwrap();
+
+    if !options.no_display && !options.debug {
+        let success = task_counters.success.load(Ordering::Relaxed);
+        let errors = task_counters.error.load(Ordering::Relaxed);
+        let error_suffix = if errors > 0 {
+            format!("  {} errors", errors).red().to_string()
+        } else {
+            String::new()
+        };
+        println!(
+            "{}{}  → {}",
+            format!("✓ Generated {} checksums", success).green(),
+            error_suffix,
+            manifest_filepath.display()
+        );
+    }
 
     Ok(())
 }

@@ -1,8 +1,12 @@
-use std::{fmt::Display, io::Write, sync::Arc, time::Duration};
+use std::{fmt::Display, sync::Arc, time::Duration};
 
-use log::warn;
+use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 
+use super::task::WorkerSlotRegistry;
 use crate::manifest::ManifestSource;
+
+/// Maximum number of per-worker spinner rows visible at once.
+const MAX_VISIBLE_WORKER_SPINNERS: usize = 8;
 
 /// Trait for display error types.
 ///
@@ -41,7 +45,7 @@ pub type DisplayMessageProcessor<DResult, DError, DCounters, DContext> =
 
 /// Types of messages that can be sent to the display manager.
 ///
-/// Generic over result type DResult, error type DEerror, and counter type DCounters.
+/// Generic over result type DResult, error type DError, and counter type DCounters.
 pub enum DisplayMessage<
     DResult: DisplayResult,
     DError: DisplayError,
@@ -67,6 +71,14 @@ pub enum DisplayMessage<
 
         /// Total number of items to process, if known
         total: Option<usize>,
+    },
+
+    /// Notifies the display layer that a worker slot's active file has changed.
+    InProgress {
+        /// Worker slot index (0-based)
+        slot: usize,
+        /// Current filename, or None when the slot becomes idle
+        filename: Option<String>,
     },
 
     /// Indicates the end of all operations
@@ -99,9 +111,6 @@ pub struct DisplayManager<
     /// Task that periodically produces progress messages
     progress_message_producer: Option<tokio::task::JoinHandle<anyhow::Result<()>>>,
 
-    /// Interval between progress updates in milliseconds
-    progress_message_producer_refresh_millis: Option<u64>,
-
     /// When true, all display output is suppressed
     pub disabled: bool,
 
@@ -110,6 +119,21 @@ pub struct DisplayManager<
 
     /// Size of the message buffer
     pub buffer_size: usize,
+
+    /// When true, progress bars are hidden
+    no_progress: bool,
+
+    /// Worker slot registry for tracking in-progress files
+    worker_slot_registry: Option<Arc<WorkerSlotRegistry>>,
+
+    /// Maximum number of concurrent workers
+    max_workers: usize,
+
+    /// The overall progress bar or spinner
+    overall_progress_bar: Option<ProgressBar>,
+
+    /// The multi-progress container
+    multi_progress: Option<Arc<MultiProgress>>,
 }
 
 impl<
@@ -120,11 +144,6 @@ impl<
     > DisplayManager<DResult, DError, DCounters, DContext>
 {
     /// Creates a new DisplayManager with the given counters and message processor.
-    ///
-    /// # Arguments
-    ///
-    /// * `counters` - Shared counters for tracking progress
-    /// * `message_processor` - Function that formats display messages into strings
     pub fn new(
         counters: Arc<DCounters>,
         message_processor: DisplayMessageProcessor<DResult, DError, DCounters, DContext>,
@@ -137,68 +156,54 @@ impl<
             verbosity: 0,
             display_message_consumer: None,
             progress_message_producer: None,
-            progress_message_producer_refresh_millis: None,
             buffer_size: 1024,
+            no_progress: false,
+            worker_slot_registry: None,
+            max_workers: 1,
+            overall_progress_bar: None,
+            multi_progress: None,
         }
     }
 
     /// Sets the verbosity level of the display manager.
-    ///
-    /// Higher verbosity values show more detailed information.
-    ///
-    /// # Arguments
-    ///
-    /// * `verbosity` - The verbosity level to set
     pub fn with_verbosity(mut self, verbosity: u8) -> Self {
         self.verbosity = verbosity;
         self
     }
 
     /// Enables or disables all display output.
-    ///
-    /// # Arguments
-    ///
-    /// * `disabled` - When true, suppresses all output
     pub fn with_disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
     }
 
     /// Sets the size of the message buffer.
-    ///
-    /// Larger buffer sizes allow more messages to be queued
-    /// before blocking the sender.
-    ///
-    /// # Arguments
-    ///
-    /// * `buffer_size` - Size of the message buffer in number of messages
     pub fn with_buffer_size(mut self, buffer_size: usize) -> Self {
         self.buffer_size = buffer_size;
         self
     }
 
-    /// Enables progress bar display with the specified refresh rate.
-    ///
-    /// # Arguments
-    ///
-    /// * `refresh_millis` - Milliseconds between progress updates
-    pub fn with_progress(mut self, refresh_millis: u64) -> Self {
-        self.progress_message_producer_refresh_millis = Some(refresh_millis);
+    /// Enables or disables progress bar display.
+    pub fn with_no_progress(mut self, no_progress: bool) -> Self {
+        self.no_progress = no_progress;
+        self
+    }
+
+    /// Sets the worker slot registry and max workers for per-file spinner display.
+    pub fn with_worker_slots(
+        mut self,
+        registry: Arc<WorkerSlotRegistry>,
+        max_workers: usize,
+    ) -> Self {
+        self.worker_slot_registry = Some(registry);
+        self.max_workers = max_workers;
         self
     }
 
     /// Starts the display manager with the given manifest source.
     ///
-    /// Creates message channels and spawns background tasks for
-    /// consuming and producing messages.
-    ///
-    /// # Arguments
-    ///
-    /// * `manifest_source` - Source information for the manifest being processed
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if message sending fails
+    /// Creates message channels, builds indicatif progress bars/spinners,
+    /// and spawns background tasks for consuming and producing messages.
     pub async fn start(
         &mut self,
         manifest_source: ManifestSource,
@@ -208,19 +213,82 @@ impl<
             return Ok(());
         }
 
+        let multi_progress = Arc::new(MultiProgress::new());
+        if self.no_progress {
+            multi_progress.set_draw_target(ProgressDrawTarget::hidden());
+        }
+
+        let total = self.counters.total();
+
+        // Build overall bar or spinner
+        let overall_progress_bar = match total {
+            Some(n) => {
+                let progress_bar = multi_progress.add(ProgressBar::new(n as u64));
+                progress_bar.set_style(bar_style());
+                progress_bar
+            }
+            None => {
+                let progress_bar = multi_progress.add(ProgressBar::new_spinner());
+                progress_bar.set_style(spinner_style());
+                progress_bar
+            }
+        };
+
+        // Build per-worker item rows (capped, hidden when verbose)
+        let show_worker_rows = self.verbosity == 0;
+        let visible_spinner_count = if show_worker_rows {
+            self.max_workers.min(MAX_VISIBLE_WORKER_SPINNERS)
+        } else {
+            0
+        };
+        let overflow_count = if show_worker_rows {
+            self.max_workers.saturating_sub(MAX_VISIBLE_WORKER_SPINNERS)
+        } else {
+            0
+        };
+        let worker_spinners: Vec<ProgressBar> = (0..visible_spinner_count)
+            .map(|_| {
+                let pb = multi_progress.add(ProgressBar::new_spinner());
+                pb.set_style(worker_item_style());
+                pb
+            })
+            .collect();
+
+        let overflow_progress_bar = if overflow_count > 0 {
+            let progress_bar = multi_progress.add(ProgressBar::new_spinner());
+            progress_bar.set_style(overflow_style());
+            progress_bar.set_message(format!("(+{} more workers)", overflow_count));
+            Some(progress_bar)
+        } else {
+            None
+        };
+
         let (tx, rx) = tokio::sync::mpsc::channel(self.buffer_size);
         self.tx = Some(tx.clone());
+        self.overall_progress_bar = Some(overall_progress_bar.clone());
+        self.multi_progress = Some(Arc::clone(&multi_progress));
+
+        // Spawn consumer
         self.display_message_consumer = Some(tokio::spawn(display_message_consumer(
             rx,
             self.display_message_processor,
             self.verbosity,
+            self.no_progress,
+            Arc::clone(&multi_progress),
+            overall_progress_bar.clone(),
+            worker_spinners.clone(),
         )));
 
-        if let Some(refresh_millis) = self.progress_message_producer_refresh_millis {
+        // Spawn producer (if progress enabled)
+        if !self.no_progress {
             self.progress_message_producer = Some(tokio::spawn(progress_message_producer(
                 tx.clone(),
                 self.counters.clone(),
-                refresh_millis,
+                self.worker_slot_registry.clone(),
+                10,
+                overall_progress_bar.clone(),
+                worker_spinners.clone(),
+                overflow_progress_bar,
             )));
         }
 
@@ -230,17 +298,6 @@ impl<
     }
 
     /// Stops the display manager and waits for shutdown.
-    ///
-    /// Sends an exit message, aborts background tasks, and signals
-    /// completion through the provided channel.
-    ///
-    /// # Arguments
-    ///
-    /// * `sync_tx` - Channel to signal when shutdown is complete
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if sending the exit message fails
     pub async fn stop(&self, sync_tx: tokio::sync::oneshot::Sender<()>) -> anyhow::Result<()> {
         if let Some(handle) = &self.progress_message_producer {
             handle.abort();
@@ -260,19 +317,19 @@ impl<
             handle.abort();
         }
 
+        // Clear all bars from terminal
+        if let Some(progress_bar) = &self.overall_progress_bar {
+            progress_bar.finish_and_clear();
+        }
+        if let Some(multi_progress) = &self.multi_progress {
+            let _ = multi_progress.clear();
+        }
+
         sync_tx.send(()).unwrap();
         Ok(())
     }
 
     /// Reports a successful result to be displayed.
-    ///
-    /// # Arguments
-    ///
-    /// * `result` - The result to report
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if sending the message fails
     pub async fn report_result(&self, result: DResult) -> anyhow::Result<()> {
         if let Some(tx) = &self.tx {
             tx.send(DisplayMessage::Result(result)).await?;
@@ -282,14 +339,6 @@ impl<
     }
 
     /// Reports an error to be displayed.
-    ///
-    /// # Arguments
-    ///
-    /// * `error` - The error to report
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if sending the message fails
     pub async fn report_error(&self, error: DError) -> anyhow::Result<()> {
         if let Some(tx) = &self.tx {
             tx.send(DisplayMessage::Error(error)).await?;
@@ -298,12 +347,6 @@ impl<
     }
 
     /// Reports current progress to be displayed.
-    ///
-    /// Sends a progress message with the current counter values.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if sending the message fails
     pub async fn report_progress(&self) -> anyhow::Result<()> {
         if let Some(tx) = &self.tx {
             tx.send(DisplayMessage::Progress {
@@ -317,6 +360,26 @@ impl<
     }
 }
 
+fn bar_style() -> ProgressStyle {
+    ProgressStyle::with_template("{bar:40.cyan/dim}  {pos}/{len}  {msg}")
+        .unwrap()
+        .progress_chars("━╸ ")
+}
+
+fn spinner_style() -> ProgressStyle {
+    ProgressStyle::with_template("{spinner:.green}  {msg}")
+        .unwrap()
+        .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", ""])
+}
+
+fn worker_item_style() -> ProgressStyle {
+    ProgressStyle::with_template("  {msg:.dim}").unwrap()
+}
+
+fn overflow_style() -> ProgressStyle {
+    ProgressStyle::with_template("  {msg:.dim}").unwrap()
+}
+
 async fn display_message_consumer<
     DResult: DisplayResult,
     DError: DisplayError,
@@ -326,40 +389,50 @@ async fn display_message_consumer<
     mut rx: tokio::sync::mpsc::Receiver<DisplayMessage<DResult, DError, DCounters, DContext>>,
     message_processor: DisplayMessageProcessor<DResult, DError, DCounters, DContext>,
     verbosity: u8,
+    no_progress: bool,
+    multi_progress: Arc<MultiProgress>,
+    overall_progress_bar: ProgressBar,
+    worker_spinners: Vec<ProgressBar>,
 ) -> anyhow::Result<()> {
-    let mut progress_visible = false;
-    let clear_progress = |visible: &mut bool| {
-        if *visible {
-            print!("\r\x1B[K");
-            *visible = false;
-        }
-    };
-
     while let Some(message) = rx.recv().await {
-        if matches!(message, DisplayMessage::Exit) {
-            break;
+        match message {
+            DisplayMessage::Exit => break,
+            DisplayMessage::InProgress { slot, filename } => {
+                if let Some(pb) = worker_spinners.get(slot) {
+                    match filename {
+                        Some(name) => pb.set_message(name),
+                        None => pb.set_message(""),
+                    }
+                }
+            }
+            DisplayMessage::Progress {
+                current,
+                counters,
+                total,
+            } => {
+                overall_progress_bar.set_position(current as u64);
+                let status = message_processor(
+                    DisplayMessage::Progress {
+                        counters,
+                        current,
+                        total,
+                    },
+                    verbosity,
+                );
+                if let Some(msg) = status.first() {
+                    overall_progress_bar.set_message(msg.clone());
+                }
+            }
+            other => {
+                for line in message_processor(other, verbosity) {
+                    if no_progress {
+                        println!("{}", line);
+                    } else {
+                        let _ = multi_progress.println(&line);
+                    }
+                }
+            }
         }
-
-        clear_progress(&mut progress_visible);
-        if matches!(message, DisplayMessage::Progress { .. }) {
-            let messages = message_processor(message, verbosity);
-            if messages.is_empty() {
-                continue;
-            } else if messages.len() > 1 {
-                warn!("Received multiple lines for progress message, only the first line will be displayed");
-            }
-
-            if let Some(first_message) = messages.first() {
-                print!("{}", first_message);
-                progress_visible = true;
-            }
-        } else {
-            for message in message_processor(message, verbosity) {
-                println!("{}", message);
-            }
-        }
-
-        std::io::stdout().flush()?;
     }
 
     Ok(())
@@ -373,22 +446,52 @@ async fn progress_message_producer<
 >(
     tx: tokio::sync::mpsc::Sender<DisplayMessage<DResult, DError, DCounters, DContext>>,
     counters: Arc<DCounters>,
+    worker_slots: Option<Arc<WorkerSlotRegistry>>,
     refresh_millis: u64,
+    overall_progress_bar: ProgressBar,
+    _worker_spinners: Vec<ProgressBar>,
+    _overflow_pb: Option<ProgressBar>,
 ) -> anyhow::Result<()> {
     let mut last_progress = 0;
+    let mut last_snapshot: Vec<Option<String>> = Vec::new();
     let mut interval = tokio::time::interval(Duration::from_millis(refresh_millis));
 
     loop {
         interval.tick().await;
 
-        if counters.current() != last_progress {
-            last_progress = counters.current();
-            tx.send(DisplayMessage::Progress {
-                counters: counters.clone(),
-                current: last_progress,
-                total: counters.total(),
-            })
-            .await?;
+        // Tick overall bar for spinner animation (generate mode)
+        overall_progress_bar.tick();
+
+        // Send Progress message if counter changed
+        let current = counters.current();
+        if current != last_progress {
+            last_progress = current;
+            let _ = tx
+                .send(DisplayMessage::Progress {
+                    counters: counters.clone(),
+                    current,
+                    total: counters.total(),
+                })
+                .await;
+        }
+
+        // Diff slot snapshot and send InProgress messages for changed slots
+        if let Some(registry) = &worker_slots {
+            let snapshot = registry.snapshot();
+            if last_snapshot.len() != snapshot.len() {
+                last_snapshot = vec![None; snapshot.len()];
+            }
+            for (i, (new, old)) in snapshot.iter().zip(last_snapshot.iter()).enumerate() {
+                if new != old {
+                    let _ = tx
+                        .send(DisplayMessage::InProgress {
+                            slot: i,
+                            filename: new.clone(),
+                        })
+                        .await;
+                }
+            }
+            last_snapshot = snapshot;
         }
     }
 }
