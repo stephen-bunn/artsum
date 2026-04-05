@@ -54,13 +54,10 @@ impl ManifestParser for ArtsumParser {
             };
 
             let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() != 2 {
-                continue;
-            }
 
             let mut checksum = Checksum::from_str(parts[0])?;
             checksum.mode = mode;
-            artifacts.insert(parts[1].to_string(), checksum);
+            artifacts.insert(parts[1..].join(" ").to_string(), checksum);
         }
 
         Ok(Manifest { artifacts })
