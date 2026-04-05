@@ -1,4 +1,5 @@
 pub mod display;
+pub mod manifest;
 pub mod task;
 
 use clap::Args;

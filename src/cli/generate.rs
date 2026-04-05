@@ -20,11 +20,12 @@ use super::common::{
         DisplayContext, DisplayCounters, DisplayError, DisplayManager, DisplayMessage,
         DisplayResult,
     },
+    manifest::{artifact_mtime_unchanged, flush_manifest},
     task::{TaskCounters, TaskError, TaskManager, TaskOptions, TaskProcessorResult, TaskResult},
 };
 use crate::{
     checksum::{Checksum, ChecksumAlgorithm, ChecksumError, ChecksumMode, ChecksumOptions},
-    manifest::{Manifest, ManifestFormat, ManifestSource},
+    manifest::{ManifestFormat, ManifestSource},
 };
 
 /// Default glob pattern used for finding files when none is specified.
@@ -101,6 +102,12 @@ pub struct GenerateOptions {
     ///
     /// Higher values produce more detailed output
     pub verbosity: u8,
+
+    /// When true, ignores any existing manifest and recomputes all checksums
+    pub force: bool,
+
+    /// Number of completed artifacts between manifest flushes to disk
+    pub flush_batch_size: usize,
 }
 
 /// Possible errors that can occur during checksum generation.
@@ -506,6 +513,32 @@ pub async fn generate(options: GenerateOptions) -> Result<(), GenerateError> {
         }
     }
 
+    // Load existing manifest for resume support (unless --force)
+    let (mut artifacts, manifest_mtime) = if !options.force && manifest_filepath.is_file() {
+        let manifest_source = ManifestSource {
+            filepath: manifest_filepath.clone(),
+            format: manifest_format,
+        };
+        let mtime = std::fs::metadata(&manifest_filepath)
+            .and_then(|m| m.modified())
+            .ok();
+        match manifest_source.parser().parse(&manifest_source).await {
+            Ok(existing) => {
+                info!(
+                    "Loaded existing manifest with {} artifacts for resume",
+                    existing.artifacts.len()
+                );
+                (existing.artifacts, mtime)
+            }
+            Err(e) => {
+                debug!("Could not parse existing manifest for resume: {}", e);
+                (HashMap::new(), None)
+            }
+        }
+    } else {
+        (HashMap::new(), None)
+    };
+
     let task_counters = Arc::new(GenerateTaskCounters {
         success: Arc::new(AtomicUsize::new(0)),
         error: Arc::new(AtomicUsize::new(0)),
@@ -540,6 +573,7 @@ pub async fn generate(options: GenerateOptions) -> Result<(), GenerateError> {
         )
         .await?;
 
+    let mut skipped: usize = 0;
     for path in walk_filepaths(WalkOptions {
         root_dirpath: manifest_dirpath.clone(),
         glob: options.glob,
@@ -566,44 +600,46 @@ pub async fn generate(options: GenerateOptions) -> Result<(), GenerateError> {
             continue;
         }
 
-        if !include_patterns.is_empty() {
-            if include_patterns
+        let should_include = include_patterns.is_empty()
+            || include_patterns
                 .iter()
-                .any(|p| p.is_match(&canonical_path_string))
-            {
-                debug!("Including checksum generation for {:?}", path);
-                let display_name = canonical_path.to_string_lossy().into_owned();
-                task_manager
-                    .spawn(
-                        GenerateTaskOptions {
-                            filepath: canonical_path,
-                            algorithm: checksum_algorithm,
-                            mode: checksum_mode,
-                            chunk_size: checksum_chunk_size,
-                        },
-                        Some(display_name),
-                    )
-                    .await;
-            }
-        } else {
-            let display_name = canonical_path.to_string_lossy().into_owned();
-            task_manager
-                .spawn(
-                    GenerateTaskOptions {
-                        filepath: canonical_path,
-                        algorithm: checksum_algorithm,
-                        mode: checksum_mode,
-                        chunk_size: checksum_chunk_size,
-                    },
-                    Some(display_name),
-                )
-                .await;
+                .any(|p| p.is_match(&canonical_path_string));
+        if !should_include {
+            continue;
         }
+
+        // Check if we can skip this file via mtime resume
+        if let Some(ref_mtime) = manifest_mtime {
+            if let Some(relative_filepath) =
+                pathdiff::diff_paths(&canonical_path, &manifest_dirpath)
+            {
+                let relative_key = relative_filepath.to_string_lossy().into_owned();
+                if artifacts.contains_key(&relative_key)
+                    && artifact_mtime_unchanged(&canonical_path, ref_mtime)
+                {
+                    debug!("Skipping unchanged artifact {:?}", relative_key);
+                    skipped += 1;
+                    continue;
+                }
+            }
+        }
+
+        let display_name = canonical_path.to_string_lossy().into_owned();
+        task_manager.spawn(
+            GenerateTaskOptions {
+                filepath: canonical_path,
+                algorithm: checksum_algorithm,
+                mode: checksum_mode,
+                chunk_size: checksum_chunk_size,
+            },
+            Some(display_name),
+        );
     }
 
-    let mut artifacts = HashMap::with_capacity(task_manager.tasks.len());
-    for task in task_manager.tasks {
-        let task_result = task.await?;
+    let flush_batch_size = options.flush_batch_size;
+    let mut pending_flush = 0usize;
+    while let Some(task_result) = task_manager.join_next().await {
+        let task_result = task_result?;
         match task_result {
             Ok(result) => {
                 let checksum = result.checksum.clone();
@@ -612,6 +648,13 @@ pub async fn generate(options: GenerateOptions) -> Result<(), GenerateError> {
                 {
                     artifacts.insert(relative_filepath.to_string_lossy().into_owned(), checksum);
                     display_manager.report_result(result).await?;
+                    pending_flush += 1;
+
+                    if pending_flush >= flush_batch_size {
+                        flush_manifest(&manifest_filepath, manifest_parser.as_ref(), &artifacts)
+                            .await?;
+                        pending_flush = 0;
+                    }
                 }
             }
             Err(error) => {
@@ -620,17 +663,10 @@ pub async fn generate(options: GenerateOptions) -> Result<(), GenerateError> {
         }
     }
 
-    info!("Writing manifest to {:?}", manifest_filepath);
-    tokio::fs::write(
-        &manifest_filepath,
-        manifest_parser
-            .to_string(&Manifest {
-                version: None,
-                artifacts,
-            })
-            .await?,
-    )
-    .await?;
+    // Final flush for any remaining buffered results
+    if pending_flush > 0 || artifacts.is_empty() {
+        flush_manifest(&manifest_filepath, manifest_parser.as_ref(), &artifacts).await?;
+    }
 
     display_manager.report_progress().await?;
 
@@ -642,17 +678,20 @@ pub async fn generate(options: GenerateOptions) -> Result<(), GenerateError> {
     if !options.no_display && !options.debug {
         let success = task_counters.success.load(Ordering::Relaxed);
         let errors = task_counters.error.load(Ordering::Relaxed);
-        let error_suffix = if errors > 0 {
-            format!("  {} errors", errors).red().to_string()
+        let mut parts = vec![if success > 0 {
+            format!("✓ {} added", success).green().to_string()
         } else {
-            String::new()
-        };
-        println!(
-            "{}{}  → {}",
-            format!("✓ Generated {} checksums", success).green(),
-            error_suffix,
-            manifest_filepath.display()
-        );
+            format!("✓ {} added", success).dimmed().to_string()
+        }];
+        parts.push(if errors > 0 {
+            format!("✗ {} errors", errors).red().to_string()
+        } else {
+            format!("✗ {} errors", errors).dimmed().to_string()
+        });
+        if skipped > 0 {
+            parts.push(format!("{} skipped", skipped).dimmed().to_string());
+        }
+        println!("{}  → {}", parts.join("  "), manifest_filepath.display());
     }
 
     Ok(())

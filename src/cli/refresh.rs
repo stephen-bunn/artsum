@@ -19,11 +19,12 @@ use super::common::{
         DisplayContext, DisplayCounters, DisplayError, DisplayManager, DisplayMessage,
         DisplayResult,
     },
+    manifest::{artifact_mtime_unchanged, flush_manifest},
     task::{TaskCounters, TaskError, TaskManager, TaskOptions, TaskProcessorResult, TaskResult},
 };
 use crate::{
     checksum::{Checksum, ChecksumAlgorithm, ChecksumError, ChecksumMode, ChecksumOptions},
-    manifest::{Manifest, ManifestSource},
+    manifest::ManifestSource,
 };
 
 /// Configuration options for the manifest refresh operation.
@@ -61,6 +62,12 @@ pub struct RefreshOptions {
     ///
     /// Higher values produce more detailed output
     pub verbosity: u8,
+
+    /// When true, ignores mtime checks and recomputes all artifacts
+    pub force: bool,
+
+    /// Number of completed artifacts between manifest flushes to disk
+    pub flush_batch_size: usize,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -376,6 +383,11 @@ pub async fn refresh(options: RefreshOptions) -> Result<(), RefreshError> {
     let manifest_parser = manifest_source.parser();
     let manifest = manifest_parser.parse(&manifest_source).await?;
 
+    // Capture manifest mtime before any writes for resume comparison
+    let manifest_mtime = std::fs::metadata(&manifest_filepath)
+        .and_then(|m| m.modified())
+        .ok();
+
     // Validate that 'best' algorithm is only used with artsum format
     if manifest_source.format != crate::manifest::ManifestFormat::ARTSUM {
         for checksum in manifest.artifacts.values() {
@@ -387,15 +399,45 @@ pub async fn refresh(options: RefreshOptions) -> Result<(), RefreshError> {
         }
     }
 
+    // Pre-process artifacts: handle removals and mtime-based skipping eagerly
+    let mut artifacts: HashMap<String, Checksum> = HashMap::new();
+    let mut skipped: usize = 0;
+    let mut early_removed: usize = 0;
+    let mut to_recompute: Vec<(String, Checksum)> = Vec::new();
+
+    for (filename, old) in &manifest.artifacts {
+        let filepath = PathBuf::from(filename);
+        if !filepath.is_file() {
+            debug!("Artifact no longer exists, removing: {:?}", filename);
+            early_removed += 1;
+            continue;
+        }
+
+        if !options.force {
+            if let Some(ref_mtime) = manifest_mtime {
+                if artifact_mtime_unchanged(&filepath, ref_mtime) {
+                    debug!("Skipping mtime-unchanged artifact: {:?}", filename);
+                    artifacts.insert(filename.clone(), old.clone());
+                    skipped += 1;
+                    continue;
+                }
+            }
+        }
+
+        to_recompute.push((filename.clone(), old.clone()));
+    }
+
+    let recompute_count = to_recompute.len();
+    let total_count = recompute_count + skipped + early_removed;
+
     let task_counters = Arc::new(RefreshTaskCounters {
-        total: Arc::new(AtomicUsize::new(manifest.artifacts.len())),
+        total: Arc::new(AtomicUsize::new(total_count)),
         updated: Arc::new(AtomicUsize::new(0)),
-        unchanged: Arc::new(AtomicUsize::new(0)),
-        removed: Arc::new(AtomicUsize::new(0)),
+        unchanged: Arc::new(AtomicUsize::new(skipped)),
+        removed: Arc::new(AtomicUsize::new(early_removed)),
         error: Arc::new(AtomicUsize::new(0)),
     });
     let mut task_manager = TaskManager::new(task_counters.clone(), pinned_task_processor)
-        .with_task_capacity(manifest.artifacts.len())
         .with_max_workers(options.max_workers);
 
     let mut display_manager = DisplayManager::new(task_counters.clone(), display_message_processor)
@@ -413,30 +455,31 @@ pub async fn refresh(options: RefreshOptions) -> Result<(), RefreshError> {
         .start(manifest_source, display_context)
         .await?;
 
-    for (filename, old) in &manifest.artifacts {
-        task_manager
-            .spawn(
-                RefreshTaskOptions {
-                    filepath: PathBuf::from(filename),
-                    checksum: old.clone(),
-                    checksum_algorithm: Some(old.algorithm),
-                    checksum_mode: Some(old.mode),
-                    chunk_size: options.chunk_size,
-                },
-                Some(filename.clone()),
-            )
-            .await;
+    for (filename, old) in &to_recompute {
+        task_manager.spawn(
+            RefreshTaskOptions {
+                filepath: PathBuf::from(filename),
+                checksum: old.clone(),
+                checksum_algorithm: Some(old.algorithm),
+                checksum_mode: Some(old.mode),
+                chunk_size: options.chunk_size,
+            },
+            Some(filename.clone()),
+        );
     }
 
-    let mut artifacts = HashMap::new();
-    for task in task_manager.tasks {
-        let task_result = task.await?;
+    let flush_batch_size = options.flush_batch_size;
+    let mut pending_flush = 0usize;
+    while let Some(task_result) = task_manager.join_next().await {
+        let task_result = task_result?;
         match task_result {
             Ok(result) => {
                 let filename = result.filename.clone();
                 let status = result.status.clone();
                 match status {
-                    RefreshTaskStatus::Removed => (),
+                    RefreshTaskStatus::Removed => {
+                        artifacts.remove(&filename);
+                    }
                     RefreshTaskStatus::Updated { old: _, new } => {
                         artifacts.insert(filename, new);
                     }
@@ -446,23 +489,22 @@ pub async fn refresh(options: RefreshOptions) -> Result<(), RefreshError> {
                 };
 
                 display_manager.report_result(result).await?;
+                pending_flush += 1;
+
+                if pending_flush >= flush_batch_size {
+                    flush_manifest(&manifest_filepath, manifest_parser.as_ref(), &artifacts)
+                        .await?;
+                    pending_flush = 0;
+                }
             }
             Err(error) => display_manager.report_error(error).await?,
         }
     }
 
-    info!("Writing manifest to {:?}", manifest_filepath);
-    let manifest_output_filepath = manifest_filepath.clone();
-    tokio::fs::write(
-        manifest_filepath,
-        manifest_parser
-            .to_string(&Manifest {
-                version: None,
-                artifacts,
-            })
-            .await?,
-    )
-    .await?;
+    // Final flush for any remaining buffered results
+    if pending_flush > 0 || to_recompute.is_empty() {
+        flush_manifest(&manifest_filepath, manifest_parser.as_ref(), &artifacts).await?;
+    }
 
     display_manager.report_progress().await?;
 
@@ -475,24 +517,23 @@ pub async fn refresh(options: RefreshOptions) -> Result<(), RefreshError> {
         let updated = task_counters.updated.load(Ordering::Relaxed);
         let unchanged = task_counters.unchanged.load(Ordering::Relaxed);
         let removed = task_counters.removed.load(Ordering::Relaxed);
-        let updated_str = if updated > 0 {
-            format!("✓ {} updated", updated).green().to_string()
-        } else {
-            format!("✓ {} updated", updated).dimmed().to_string()
-        };
-        let unchanged_str = format!("= {} unchanged", unchanged).blue().to_string();
-        let removed_str = if removed > 0 {
-            format!("✗ {} removed", removed).yellow().to_string()
-        } else {
-            format!("✗ {} removed", removed).dimmed().to_string()
-        };
-        println!(
-            "{}  {}  {}  → {}",
-            updated_str,
-            unchanged_str,
-            removed_str,
-            manifest_output_filepath.display()
-        );
+        let mut parts = vec![
+            if updated > 0 {
+                format!("✓ {} updated", updated).green().to_string()
+            } else {
+                format!("✓ {} updated", updated).dimmed().to_string()
+            },
+            format!("= {} unchanged", unchanged).blue().to_string(),
+            if removed > 0 {
+                format!("✗ {} removed", removed).yellow().to_string()
+            } else {
+                format!("✗ {} removed", removed).dimmed().to_string()
+            },
+        ];
+        if skipped > 0 {
+            parts.push(format!("{} skipped", skipped).dimmed().to_string());
+        }
+        println!("{}  → {}", parts.join("  "), manifest_filepath.display());
     }
 
     if task_counters.error.load(Ordering::Relaxed) > 0 {

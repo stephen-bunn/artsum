@@ -6,7 +6,7 @@ mod verify;
 
 use std::{env::current_dir, path::PathBuf, thread};
 
-use clap::Parser;
+use clap::{builder::styling, Parser};
 use log::debug;
 use simplelog::ColorChoice;
 
@@ -14,6 +14,8 @@ use crate::{
     checksum::{ChecksumAlgorithm, ChecksumMode, DEFAULT_CHUNK_SIZE},
     manifest::ManifestFormat,
 };
+
+use common::manifest::DEFAULT_FLUSH_BATCH_SIZE;
 
 use common::GlobalFlags;
 
@@ -32,8 +34,17 @@ impl GlobalFlags {
     }
 }
 
+const STYLES: styling::Styles = styling::Styles::styled()
+    .header(styling::AnsiColor::Yellow.on_default().bold())
+    .usage(styling::AnsiColor::Yellow.on_default().bold())
+    .literal(styling::AnsiColor::Cyan.on_default().bold())
+    .placeholder(styling::AnsiColor::Green.on_default())
+    .error(styling::AnsiColor::Red.on_default().bold())
+    .valid(styling::AnsiColor::Green.on_default().bold())
+    .invalid(styling::AnsiColor::Red.on_default().bold());
+
 #[derive(Debug, clap::Parser)]
-#[clap(version = env!("CARGO_PKG_VERSION"))]
+#[clap(version = env!("CARGO_PKG_VERSION"), styles = STYLES)]
 pub struct Cli {
     #[clap(subcommand)]
     pub command: Option<Commands>,
@@ -87,6 +98,12 @@ The manifest file will contain the checksums of all files in the directory and i
         /// Maximum number of workers to use
         #[arg(short = 'x', long = "max-workers")]
         max_workers: Option<usize>,
+        /// Ignore any existing manifest and recompute all checksums
+        #[arg(long, default_value_t = false)]
+        force: bool,
+        /// Number of completed artifacts between manifest flushes to disk
+        #[arg(long, default_value_t = DEFAULT_FLUSH_BATCH_SIZE)]
+        flush_batch_size: usize,
         #[command(flatten)]
         global_flags: GlobalFlags,
     },
@@ -135,6 +152,12 @@ If no explicit manifest file is provided, it will look for a manifest file in th
         /// Maximum number of workers to use
         #[arg(short = 'x', long = "max-workers")]
         max_workers: Option<usize>,
+        /// Ignore mtime checks and recompute all artifacts
+        #[arg(long, default_value_t = false)]
+        force: bool,
+        /// Number of completed artifacts between manifest flushes to disk
+        #[arg(long, default_value_t = DEFAULT_FLUSH_BATCH_SIZE)]
+        flush_batch_size: usize,
         #[command(flatten)]
         global_flags: GlobalFlags,
     },
@@ -184,6 +207,8 @@ pub async fn cli() -> anyhow::Result<()> {
             ignore_vcs,
             chunk_size,
             max_workers,
+            force,
+            flush_batch_size,
             ref global_flags,
         }) => {
             let merged_flags = get_merged_flags(&global_flags);
@@ -236,6 +261,8 @@ pub async fn cli() -> anyhow::Result<()> {
                     || merged_flags.no_display
                     || merged_flags.debug,
                 verbosity: merged_flags.verbosity,
+                force,
+                flush_batch_size,
             })
             .await?;
         }
@@ -297,6 +324,8 @@ pub async fn cli() -> anyhow::Result<()> {
             manifest,
             chunk_size,
             max_workers,
+            force,
+            flush_batch_size,
             ref global_flags,
         }) => {
             let merged_flags = get_merged_flags(&global_flags);
@@ -342,6 +371,8 @@ pub async fn cli() -> anyhow::Result<()> {
                     || merged_flags.no_display
                     || merged_flags.debug,
                 verbosity: merged_flags.verbosity,
+                force,
+                flush_batch_size,
             })
             .await?;
         }

@@ -123,7 +123,6 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(actual.version, expected.version);
         assert_eq!(actual.artifacts, expected.artifacts);
     }
 
@@ -135,7 +134,6 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(actual.version, expected.version);
         assert_eq!(actual.artifacts, expected.artifacts);
     }
 
@@ -147,7 +145,6 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(actual.version, expected.version);
         assert_eq!(actual.artifacts, expected.artifacts);
     }
 

@@ -107,8 +107,8 @@ pub struct TaskManager<
     /// Counter tracking task progress
     pub counters: Arc<TCounters>,
 
-    /// Collection of spawned task handles
-    pub tasks: Vec<tokio::task::JoinHandle<Result<TResult, TError>>>,
+    /// Set of spawned tasks that yields results in completion order
+    pub tasks: tokio::task::JoinSet<Result<TResult, TError>>,
 
     /// Registry tracking which files are being processed by each worker slot
     pub worker_slots: Arc<WorkerSlotRegistry>,
@@ -136,7 +136,7 @@ impl<TResult: TaskResult, TError: TaskError, TCounters: TaskCounters, TOptions: 
         Self {
             counters,
             task_processor,
-            tasks: Vec::new(),
+            tasks: tokio::task::JoinSet::new(),
             worker_slots: WorkerSlotRegistry::new(1),
             worker_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
         }
@@ -173,29 +173,19 @@ impl<TResult: TaskResult, TError: TaskError, TCounters: TaskCounters, TOptions: 
         self
     }
 
-    /// Configures the task capacity.
-    ///
-    /// # Arguments
-    ///
-    /// * `capacity` - Number of tasks to preallocate space for.
-    pub fn with_task_capacity(mut self, capacity: usize) -> Self {
-        self.tasks = Vec::with_capacity(capacity);
-        self
-    }
-
     /// Spawns a new task with the given options.
     ///
     /// # Arguments
     ///
     /// * `options` - Configuration options for the task.
     /// * `filename` - Optional display name for tracking in-progress files.
-    pub async fn spawn(&mut self, options: TOptions, filename: Option<String>) {
+    pub fn spawn(&mut self, options: TOptions, filename: Option<String>) {
         let worker_semaphore = self.worker_semaphore.clone();
         let counters = self.counters.clone();
         let task_processor = self.task_processor;
         let worker_slots = self.worker_slots.clone();
 
-        let task = tokio::spawn(async move {
+        self.tasks.spawn(async move {
             let permit = worker_semaphore
                 .acquire()
                 .await
@@ -210,7 +200,13 @@ impl<TResult: TaskResult, TError: TaskError, TCounters: TaskCounters, TOptions: 
             drop(permit);
             result
         });
+    }
 
-        self.tasks.push(task);
+    /// Returns the next completed task result, or `None` if all tasks are done.
+    /// Results are yielded in completion order, not spawn order.
+    pub async fn join_next(
+        &mut self,
+    ) -> Option<Result<Result<TResult, TError>, tokio::task::JoinError>> {
+        self.tasks.join_next().await
     }
 }

@@ -44,8 +44,9 @@ pub enum ManifestError {
 )]
 #[strum(serialize_all = "lowercase")]
 pub enum ManifestFormat {
-    /// The ARTSUM format, TOML format used by artsum.
-    /// Each checksum specifies its algorithm.
+    /// The ARTSUM format, a line-based format used by artsum.
+    /// Each line contains a checksum (with embedded algorithm) and a file path.
+    /// Default filename: `.artsum`
     #[default]
     ARTSUM,
     /// The MD5SUM format, based on the MD5 hashing algorithm.
@@ -64,7 +65,7 @@ impl ManifestFormat {
     /// Get the parser for the manifest format.
     pub fn parser(&self) -> Box<dyn ManifestParser> {
         match self {
-            ManifestFormat::ARTSUM => Box::new(artsum::ARTSUMParser::default()),
+            ManifestFormat::ARTSUM => Box::new(artsum::ArtsumParser::default()),
             ManifestFormat::MD5SUM => Box::new(md5sum::MD5SUMParser::default()),
             ManifestFormat::SHA1SUM => Box::new(sha1sum::SHA1SUMParser::default()),
             ManifestFormat::SHA256SUM => Box::new(sha256sum::SHA256SUMParser::default()),
@@ -75,11 +76,8 @@ impl ManifestFormat {
 }
 
 /// A manifest file that contains a list of artifacts and their checksums.
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Debug)]
 pub struct Manifest {
-    /// Optional version of the manifest file.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub version: Option<u8>,
     /// A map of file paths to their checksums.
     pub artifacts: HashMap<String, Checksum>,
 }
@@ -255,10 +253,7 @@ async fn standard_from_str(
         artifacts.insert(path.trim_start_matches('*').to_string(), checksum);
     }
 
-    Ok(Manifest {
-        version: None,
-        artifacts,
-    })
+    Ok(Manifest { artifacts })
 }
 
 /// The standard implementation of converting a manifest to checksum / filename pairs.
@@ -297,7 +292,6 @@ pub mod utils {
         }
 
         Manifest {
-            version: None,
             artifacts: artifacts.into_iter().collect(),
         }
     }
@@ -324,10 +318,7 @@ mod tests {
         .into_iter()
         .collect();
 
-        let manifest = Manifest {
-            version: None,
-            artifacts,
-        };
+        let manifest = Manifest { artifacts };
 
         let actual = standard_to_string(&manifest).await.unwrap();
         assert_eq!(actual, format!("{}  {}", digest, filepath));

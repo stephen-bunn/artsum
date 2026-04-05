@@ -465,7 +465,6 @@ pub async fn verify(options: VerifyOptions) -> Result<(), VerifyError> {
     });
 
     let mut task_manager = TaskManager::new(task_counters.clone(), pinned_task_processor)
-        .with_task_capacity(manifest.artifacts.len())
         .with_max_workers(options.max_workers);
 
     let mut display_manager = DisplayManager::new(task_counters.clone(), display_message_processor)
@@ -485,21 +484,19 @@ pub async fn verify(options: VerifyOptions) -> Result<(), VerifyError> {
         .await?;
 
     for (filename, expected) in &manifest.artifacts {
-        task_manager
-            .spawn(
-                VerifyTaskOptions {
-                    dirpath: options.dirpath.clone(),
-                    filename: filename.clone(),
-                    expected: expected.clone(),
-                    chunk_size: options.chunk_size,
-                },
-                Some(filename.clone()),
-            )
-            .await;
+        task_manager.spawn(
+            VerifyTaskOptions {
+                dirpath: options.dirpath.clone(),
+                filename: filename.clone(),
+                expected: expected.clone(),
+                chunk_size: options.chunk_size,
+            },
+            Some(filename.clone()),
+        );
     }
 
-    for task in task_manager.tasks {
-        let task_result = task.await.map_err(VerifyError::TaskJoinFailure)?;
+    while let Some(task_result) = task_manager.join_next().await {
+        let task_result = task_result.map_err(VerifyError::TaskJoinFailure)?;
         match task_result {
             Ok(result) => display_manager.report_result(result).await?,
             Err(error) => display_manager.report_error(error).await?,
